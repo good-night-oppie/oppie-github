@@ -22,14 +22,14 @@ This retains the existing explicit-account architecture: it is not Host-attested
 
 Red test observed six-repo QQ identity rejection before implementation. Initial full suite80passed; final focused27passed after adding owner-reference verification; final full result recorded at delivery. Pinned esbuild0.27.0+lock/build/check used, no manual bundle edits. Live candidate identity through QQ App succeeded with six repos and contents:read/minimal requested permissions. No actual enqueue/dismiss/review/ruleset mutation executed.
 
-Official docs specify pull_requests:write for dismiss, metadata:read for ruleset reads and administration:write for updates. Enqueue GraphQL requires pullRequestId; candidate also uses expectedHeadOid. Exact fine-grained enqueue permission with contents:read was not proven; lack of capability must fail, never request broader contents or fall back to a human login. Rulesets may be unavailable for the organization's private free-plan repos; no plan/visibility change is authorized here.
+Official docs specify pull_requests:write for dismiss, metadata:read for ruleset reads and administration:write for updates. Enqueue GraphQL requires pullRequestId; candidate also uses expectedHeadOid. Exact fine-grained enqueue permission with contents:read was not proven; lack of capability must fail, never request broader contents or fall back to a human login. The owner has made both source repositories public and configured main protection. Required CI checks are a separate repository-administration follow-up after the workflow reaches main; this source change does not modify repository settings.
 
 This branch is independent of pending Draft, managed-service, PG and ReviewInbox recovery PRs. Do not install it over a runtime containing those changes without explicit integration and review. Production credentials, scopes, schedules and Inbox are untouched.
 
 
 ## Verifiable one-use owner directive
 
-QQ supplied corrected source references: owner message uoo5v4wps4x67s56htfyk3cr in session c40a7fc6-d41d-4332-b4b1-0cce4f529aea at2026-11-09T23:05:28Z; earlier installation message ige9rh779hlnfk2cxihcspqf at22:30:49Z. These session IDs are audit context only, not plugin authorization evidence. No screenshot is exported.
+主人在 Cindy 中的授权记录由 QQ 保管。内部会话、消息标识和截图不在此公开；这些记录不替代插件的逐次授权校验。
 
 For each ruleset update, the owner posts a GitHub comment in the target repo or MontClip containing one exact line:
 
@@ -51,7 +51,7 @@ Local merged-tree validation:94/94 tests passed, including real isolated Inbox p
 
 ## Consolidated CI follow-up
 
-Owner closed PR#1/#3 and directed subsequent plugin work to this PR#5. Included the CLI child-env NODE_DEBUG isolation, checkout submodules:true, setup-python3.12 and OPPIE_TEST_PYTHON resolved from sys.executable. Private submodule checkout needs CI-only INBOX_SOURCE_READ_TOKEN with read access to this repository and sglang-review-inbox; no local App keys are copied to Actions. Missing access is a failure, not skipped coverage.
+Owner closed PR#1/#3 and directed subsequent plugin work to this PR#5. Included the CLI child-env NODE_DEBUG isolation, checkout submodules:true, setup-python3.12 and OPPIE_TEST_PYTHON resolved from sys.executable. Both source repositories are now public, so normal submodule checkout uses the default workflow token. No local App keys or custom token secret are copied to Actions.
 
 Windows negative reproduction showed newly created objects may carry explicit broad Administrators/Users ACEs, which /inheritance:r does not remove. tightenNew now removes non-owner/non-SYSTEM Allow ACEs on ONLY its newly-created object, then applies the unchanged strict verification. Existing stores remain verify-only and reject unsafe ACLs; no global ACL or actual account store was modified by these tests. New synthetic directory/file regression failed before the fix and passes after. The helper export exists for isolated native tests, not as a plugin tool.
 
@@ -61,3 +61,12 @@ Draft override remains excluded from this branch; no future Draft feature is imp
 
 
 Owner visibility decision confirmed by live GitHub metadata: both oppie-github and sglang-review-inbox are now public. The previously missing private-submodule CI credential is no longer required; workflow uses normal checkout with submodules:true and no custom token secret. No visibility mutation was performed by this source task.
+
+
+## Merged 1.4.0 artifact and communication boundary
+
+The merged 1.4.0 source bundle SHA256 is `97fd68a41fb5c93e16e3ecc6f8a48fd30510377aa5e4939e4092cc0b49338992`. This identifies the source artifact, not an installed-entry receipt; recompute the actual Skill realpath/hash before any Inbox pin update.
+
+QQ intentionally cannot use `comment_issue`, including ordinary Issue/PR conversation comments. Its allowed written review communication is `submit_review` on a PR; the separate bounded queue/dismiss/ruleset actions remain as documented. This preserves the approved review-only write whitelist. Restoring Issue commenting would require an explicit scope change and tests, not a documentation interpretation.
+
+For ruleset writes the nonce is consumed before the API call. On any write failure or uncertain result, first read back the remote ruleset. Do not retry with the same nonce. If another write is necessary, the owner must publish a new matching authorization comment with a fresh nonce and confirm the new call. Old directives and cached confirmations cannot be reused.

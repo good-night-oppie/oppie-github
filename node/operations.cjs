@@ -7,7 +7,7 @@ module.exports={
  get_issue:'{number:integer}',
  create_issue:'{title:string,body?:string,labels?:string[]}',
  update_issue:'{number:integer,title?:string,body?:string,labels?:string[],state?:open|closed}',
- comment_issue:'{number:integer,body:string}; explicit user-authorized comments only',
+ comment_issue:'{number:integer,body:string}; explicit user-authorized comments only; unavailable to QQ (use PR review)',
  list_pulls:'{state?:open|closed|all,page?:integer,per_page?:1..100}',
  get_pull:'{number:integer}',
  pull_files:'{number:integer,page?:integer,per_page?:1..100}',
@@ -21,7 +21,7 @@ module.exports={
  admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ only; requires explicit user request for these settings',
  list_rulesets:'{}; QQ only',
  get_ruleset:'{ruleset_id:integer}; QQ only',
- ruleset_update:'{ruleset_id:integer,ruleset:object,owner_authorization:GitHub comment URL,nonce:32hex}; QQ only; max160-byte JSON change, 24h exact owner directive + one-use nonce + Host confirmation each call',
+ ruleset_update:'{ruleset_id:integer,ruleset:object,owner_authorization:GitHub comment URL,nonce:32hex}; QQ only; max160-character JSON change, 24h exact owner directive + one-use nonce + Host confirmation each call; nonce consumed before write, failures require readback and a new owner comment/nonce, never retry it',
  dismiss_review:'{number:integer,review_id:integer,message:string}; QQ only',
  enqueue_pull:'{number:integer,commit_id:40hex}; QQ only; no auto-merge fallback',
 };

@@ -1,6 +1,6 @@
 # Managed Inbox integration candidate
 
-Implementation owner: existing agent emails @oppie.xyz task c21db06a-0f9f-453e-9217-70cdfd4997c2. Branch feat/managed-inbox. This is partial implementation of the approved plugin-owned Inbox structure, not a completed live review service.
+Implementation is tracked in the plugin repository pull requests. This is partial implementation of the approved plugin-owned Inbox structure, not a completed live review service.
 
 The plugin now owns vendor/review-inbox as a Git submodule at 7cb961a4efa7bf1480e219f967781436f5b5d78e. Repository: https://github.com/good-night-oppie/sglang-review-inbox (private source-derived fork; GitHub fork=false). Original recorded upstream BBuf/sglang-review-inbox remains404; native-fork acceptance is unresolved. Do not label this an upstream-native fork.
 
