@@ -1,1 +1,13 @@
-{"name":"oppie-github","version":"1.0.0","private":true,"scripts":{"test":"node --test test/*.test.cjs"}}
+{
+  "name": "oppie-github",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "build:skill": "node scripts/build-skill.cjs",
+    "check:bundle": "node scripts/build-skill.cjs --check"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.0"
+  }
+}
