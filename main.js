@@ -1,7 +1,7 @@
 'use strict';
 cindy.onHostMessage(async function(message) {
   if (message.type !== 'tool-call') return;
-  const methods = {github_accounts:'accounts',github_import_key:'import',github:'run',github_operations:'operations',github_review_queue:'review',github_author_cue_plan:'author_cue'};
+  const methods = {github_accounts:'accounts',github_import_key:'import',github:'run',github_operations:'operations',github_review_queue:'review',github_author_cue_plan:'author_cue',inbox_service:'inbox_service'};
   try {
     if (!Object.prototype.hasOwnProperty.call(methods,message.tool)) throw Error('UNKNOWN_TOOL');
     let method=methods[message.tool],params=message.args||{};

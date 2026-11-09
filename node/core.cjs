@@ -6,6 +6,7 @@ const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':144653
 const QQ_REPOSITORIES=Object.freeze({...REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
+const REVIEW_INBOX_INSTALLATION=Object.freeze({...REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
 const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
 const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['bb',5665927,179806310],['cindy',5665939,179806330],['deja',5665940,179806356],
@@ -121,8 +122,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(typeof probeResponse?.token!=='string'||!probeResponse.token)bad('INVALID_INSTALLATION_TOKEN');
    secrets.push(probeResponse.token);
    const probe=await api('/installation/repositories?per_page=100',probeResponse.token);
-   function exactRepos(r){const count=Object.keys(expectedRepos).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&expectedRepos[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
-   if(!exactRepos(probe))bad('REPOSITORY_SCOPE_MISMATCH');
+   function exactRepos(r,expected=expectedRepos){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
+   if(!exactRepos(probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos))bad('REPOSITORY_SCOPE_MISMATCH');
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
@@ -141,7 +142,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(preflight.kind==='file'){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');}
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),...(account.account==='reviewinbox'?{installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name}))}:{}),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
    if(operation==='enqueue_pull'&&(result?.errors||!result?.data?.enqueuePullRequest?.mergeQueueEntry?.id))throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown');
    return {ok:true,receipt:{account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{})};}

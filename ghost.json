@@ -8,12 +8,11 @@
   "version": "1.4.0",
   "command": "oppie-github",
   "entry": "main.js",
-  "launch": "on-demand",
+  "launch": "resident",
   "node": {
     "entry": "node/runtime.cjs",
     "protocol": "json-rpc-stdio",
-    "lifecycle": "on-demand",
-    "idleTimeoutSeconds": 120
+    "lifecycle": "resident"
   },
   "tools": [
     {
@@ -202,6 +201,27 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "inbox_service",
+      "description": "管理插件拥有的隔离只读 Inbox 预览：启动、健康状态、停止。不会接管既有 Inbox，也不启用评审流水线。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "status",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
     }
   ],
   "manual": {
@@ -222,6 +242,6 @@
       }
     ]
   },
-  "releaseNotes": "新增 ReviewInboxOppieXYZ 独立评审身份（COMMENT-only、代码只读）；兼容既有 App 的 OppieXYZ 改名；修复提升权限环境新建凭据文件的所有者。",
+  "releaseNotes": "候选：保留受管只读 Inbox 和 ReviewInbox 六仓安装/两仓执行；新增 QQ 六仓审查白名单及逐次主人授权，未安装。",
   "confirm": true
 }

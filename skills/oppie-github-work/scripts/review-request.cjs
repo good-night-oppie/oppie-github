@@ -54,6 +54,7 @@ var require_core = __commonJS({
     var QQ_REPOSITORIES = Object.freeze({ ...REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
+    var REVIEW_INBOX_INSTALLATION = Object.freeze({ ...REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
@@ -179,9 +180,9 @@ var require_core = __commonJS({
       async function run(input2) {
         let secrets = [];
         try {
-          let exactRepos = function(r) {
-            const count = Object.keys(expectedRepos).length;
-            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && expectedRepos[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
+          let exactRepos = function(r, expected = expectedRepos) {
+            const count = Object.keys(expected).length;
+            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
           };
           exact(input2, ["account", "repo", "operation", "args"]);
           if (typeof input2.account !== "string" || !Object.hasOwn(ACCOUNTS, input2.account)) bad("ACCOUNT_REQUIRED");
@@ -417,7 +418,7 @@ var require_core = __commonJS({
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
-          if (!exactRepos(probe)) bad("REPOSITORY_SCOPE_MISMATCH");
+          if (!exactRepos(probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos)) bad("REPOSITORY_SCOPE_MISMATCH");
           const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
@@ -455,7 +456,7 @@ var require_core = __commonJS({
               if ((current?.sha ?? null) !== preflight.sha) bad("STALE_FILE");
             }
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), ...account.account === "reviewinbox" ? { installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })) } : {}, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
           if (operation === "enqueue_pull" && (result?.errors || !result?.data?.enqueuePullRequest?.mergeQueueEntry?.id)) throw new CoreError("QUEUE_RESULT_UNCONFIRMED", "unknown");
           return { ok: true, receipt: { account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {

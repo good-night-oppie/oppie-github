@@ -40,3 +40,11 @@ authorize ruleset_update good-night-oppie/<repo> <32-lowercase-hex-nonce> parame
 The digest is SHA256 of recursively key-sorted JSON {ruleset_id,ruleset}; node/owner-authorization.cjs parametersHash/requiredLine define it. Caller passes owner_authorization URL and nonce. Exact operation/repository/nonce/parameters, owner login+ID/type, live URL and24hour TTL all must match. Host confirmation is still required in addition. Nonce is durably consumed with exclusive creation before the write; a timeout/error never makes it reusable. Concurrent calls and future runs reject replay. An unreadable/unsafe nonce store fails closed. No raw comment text or keys are logged.
 
 These new controls were not exercised with real administration writes. Final owner/Rea approval and actual Host confirmation/nonce behavior verification remain mandatory before installation. QQ remains read-only reviewer.
+
+## Base merge conflict resolution
+
+Merged main c60f0fb (containing accepted PR#4 and managed-preview PR#2) without rewriting history. Kept QQ's six-repository execution allowlist and minimal review permission request; ReviewInbox independently validates six installation repos but mints/validates a two-repository execution token. Kept owner-reference TTL/parameter/nonce checks and fresh Host confirmation. Runtime retains both confirmed QQ dispatch and resident Inbox lifecycle; no service is started by this source merge.
+
+Conflicts resolved individually in ghost.json, node/core.cjs, node/runtime.cjs, test/core.test.cjs; generated Skill bundle rebuilt with pinned esbuild rather than choosing either side. Manifest stays1.4.0 candidate, retains confirm capability and main's resident lifecycle. Fixtures model each token's actual repository_ids for both QQ and ReviewInbox; both negative suites retained.
+
+Local merged-tree validation:94/94 tests passed, including real isolated Inbox process tests, owner-confirmation/nonce tests and Windows ACL test. npm ci, check:bundle and git diff --check passed. Actual private submodule checked out at unchanged7cb961a4. No new live GitHub writes or installed-Host acceptance was run. New merged head requires owner/Rea final review; old approvals do not transfer.

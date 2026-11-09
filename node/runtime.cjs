@@ -9,6 +9,11 @@ const operations=require('./operations.cjs');
 const deployment=require('../deployment.json');
 const {createQueue}=require('./review-queue.cjs');
 const client=createClient({credentials:async account=>(await store.load(account)).privateKey});
+const inboxService=require('./inbox-service.cjs').createManager({configPath:path.join(store.paths.root,'inbox-service.json')});
+// Resident native worker owns this preview. Missing configuration is a status, never ready.
+void inboxService.start();
+const shutdown=()=>inboxService.stop().finally(()=>process.exit(0));
+process.stdin.on('end',shutdown);process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 const queue=createQueue({client,statePath:path.join(store.paths.root,'review-state.json')});
 async function dispatch(method,args){
  if(method==='run_confirmed'){
@@ -16,6 +21,7 @@ async function dispatch(method,args){
   if(!deployment.accounts.includes('qq')||input?.account!=='qq'||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)throw Error('OWNER_CONFIRMATION_REQUIRED');
   return createClient({credentials:async a=>(await store.load(a)).privateKey,authorize:async()=>true,claimAuthorization:async nonce=>{await store.list();return require('./owner-authorization.cjs').claimNonce(path.join(store.paths.root,'qq-authorization-nonces'),nonce);}}).run(input);
  }
+ if(method==='inbox_service'){if(Object.keys(args).some(k=>k!=='action')||!['start','stop','status'].includes(args.action))throw Error('INVALID_ACTION');return inboxService[args.action]();}
  if(['run','import'].includes(method)&&!deployment.accounts.includes(args.account))return {ok:false,errorCode:'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST',execution:'not_executed'};
  if(method==='author_cue')return require('./author-cue.cjs').planAuthorCues(args);
  if(method==='accounts'){
