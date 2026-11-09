@@ -11,6 +11,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.INBOX_SOURCE_READ_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve exact test Python
+        shell: bash
+        run: python -c "import os,sys; f=open(os.environ['GITHUB_ENV'],'a'); f.write('OPPIE_TEST_PYTHON='+sys.executable+'\n'); f.close()"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
