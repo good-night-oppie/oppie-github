@@ -1,0 +1,9 @@
+*.cindy
+node_modules/
+*.pem
+*.key
+.env*
+accounts.json
+credentials.json
+*.log
+__pycache__/

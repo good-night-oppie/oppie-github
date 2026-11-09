@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "0.1.126",
+  "id": "oppie-github",
+  "name": "伙伴 GitHub",
+  "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
+  "whenToUse": "伙伴通过独立 GitHub App 操作 MontClip 两仓的 Issue、PR 和代码；ReviewInbox 用 ReviewInboxOppieXYZ 发表 Agent COMMENT 评审时。",
+  "version": "1.2.1",
+  "command": "oppie-github",
+  "entry": "main.js",
+  "launch": "on-demand",
+  "node": {
+    "entry": "node/runtime.cjs",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "on-demand",
+    "idleTimeoutSeconds": 120
+  },
+  "tools": [
+    {
+      "name": "github_accounts",
+      "description": "列出本机允许的 App 账号与凭据可读状态；名称标明预期/存储值，实时注册身份以 identity 回执为准。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_operations",
+      "description": "读取可用操作及各操作参数格式；实际写操作前按该格式传参。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_import_key",
+      "description": "按用户授权从明确的本机 PEM 文件导入 App 私钥；先验证真实 App 与安装范围，再由 Windows DPAPI 或 Linux Secret Service 加密保护。不要在参数中传私钥正文。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "enum": [
+              "bb",
+              "cindy",
+              "deja",
+              "dd",
+              "gg",
+              "jj",
+              "pg",
+              "qq",
+              "rea",
+              "video",
+              "vv",
+              "reviewinbox"
+            ]
+          },
+          "pem_path": {
+            "type": "string"
+          },
+          "replace": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account",
+          "pem_path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github",
+      "description": "使用显式App身份操作已授权两个仓库。先用github_operations查询参数；写入须对应用户任务授权。不会回退共享gh登录；未知结果先读回，勿重复写。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "enum": [
+              "bb",
+              "cindy",
+              "deja",
+              "dd",
+              "gg",
+              "jj",
+              "pg",
+              "qq",
+              "rea",
+              "video",
+              "vv",
+              "reviewinbox"
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "enum": [
+              "MontClip",
+              "MontClip-Cindy"
+            ]
+          },
+          "operation": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "account",
+          "repo",
+          "operation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_review_queue",
+      "description": "自动评审队列：initialize只记录初始head；poll只读候选并对账；claim持有30分钟租约；finish必须验证真实review身份、head和标记。不得以完成标记替代真实评审。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "initialize",
+              "poll",
+              "claim",
+              "finish"
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "enum": [
+              "good-night-oppie/MontClip",
+              "good-night-oppie/MontClip-Cindy"
+            ]
+          },
+          "number": {
+            "type": "integer"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "claim_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_author_cue_plan",
+      "description": "按BB规则计算作者提醒计划，不发送/不记录投递。输入须来自完整当前head快照及实际核验的承接来源；仅设置sourceVerified不足以证明核验。旧head、未到reportAt、重复cue抑制；归属不明交Deja，安全问题QQ。详见manual/author-cue-rules。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "now": {
+            "type": "number"
+          },
+          "activationAt": {
+            "type": "number"
+          },
+          "snapshot": {
+            "type": "object"
+          },
+          "roster": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "ownership": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "priorCues": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "now",
+          "activationAt",
+          "snapshot",
+          "roster",
+          "ownership",
+          "priorCues"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "manual": {
+    "items": [
+      {
+        "name": "agent-github",
+        "description": "伙伴身份选择、权限、PR评审及自动任务流程",
+        "dir": "manual/agent-github"
+      }
+    ]
+  },
+  "skill": {
+    "items": [
+      {
+        "name": "oppie-github-work",
+        "description": "Use the selected Oppie teammate GitHub App for MontClip code, issues, pull requests and reviews.",
+        "dir": "skills/oppie-github-work"
+      }
+    ]
+  },
+  "releaseNotes": "新增 ReviewInboxOppieXYZ 独立评审身份（COMMENT-only、代码只读）；兼容既有 App 的 OppieXYZ 改名；修复提升权限环境新建凭据文件的所有者。"
+}
