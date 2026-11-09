@@ -29,7 +29,7 @@ This branch is independent of pending Draft, managed-service, PG and ReviewInbox
 
 ## Verifiable one-use owner directive
 
-The owner's scope decisions are retained in private audit records. Internal conversation/message identifiers and screenshots are not published here. Those records are not a substitute for the plugin's per-action authorization checks.
+主人在 Cindy 中的授权记录由 QQ 保管。内部会话、消息标识和截图不在此公开；这些记录不替代插件的逐次授权校验。
 
 For each ruleset update, the owner posts a GitHub comment in the target repo or MontClip containing one exact line:
 
@@ -61,3 +61,12 @@ Draft override remains excluded from this branch; no future Draft feature is imp
 
 
 Owner visibility decision confirmed by live GitHub metadata: both oppie-github and sglang-review-inbox are now public. The previously missing private-submodule CI credential is no longer required; workflow uses normal checkout with submodules:true and no custom token secret. No visibility mutation was performed by this source task.
+
+
+## Merged 1.4.0 artifact and communication boundary
+
+The merged 1.4.0 source bundle SHA256 is `97fd68a41fb5c93e16e3ecc6f8a48fd30510377aa5e4939e4092cc0b49338992`. This identifies the source artifact, not an installed-entry receipt; recompute the actual Skill realpath/hash before any Inbox pin update.
+
+QQ intentionally cannot use `comment_issue`, including ordinary Issue/PR conversation comments. Its allowed written review communication is `submit_review` on a PR; the separate bounded queue/dismiss/ruleset actions remain as documented. This preserves the approved review-only write whitelist. Restoring Issue commenting would require an explicit scope change and tests, not a documentation interpretation.
+
+For ruleset writes the nonce is consumed before the API call. On any write failure or uncertain result, first read back the remote ruleset. Do not retry with the same nonce. If another write is necessary, the owner must publish a new matching authorization comment with a fresh nonce and confirm the new call. Old directives and cached confirmations cannot be reused.
