@@ -1,0 +1,3 @@
+[submodule "vendor/review-inbox"]
+	path = vendor/review-inbox
+	url = https://github.com/good-night-oppie/sglang-review-inbox.git
