@@ -10,7 +10,7 @@ const expected={contents:'write',issues:'write',pull_requests:'write',metadata:'
 const repos={total_count:2,repositories:Object.entries(REPOSITORIES).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
 const SHA='a'.repeat(40);
 function fixture(options={}){
- const calls=[];let credentialsCalls=0;let counter=0;
+ const calls=[];const tokenRepositories=new Map();let credentialsCalls=0;let counter=0;
  const account=ACCOUNTS[options.account||'bb']||(options.account==='reviewinbox'?{account:'reviewinbox',app_id:5687106,installation_id:180305629,admin:false}:undefined);
  const perms={...expected,...(account.account==='reviewinbox'?{contents:'read'}:{}),...(account.admin?{administration:'write'}:{})};
  const fetch=async(url,init)=>{
@@ -20,8 +20,14 @@ function fixture(options={}){
   if(options.override){const out=await options.override(path,init,calls);if(out){if(out.throw)throw Error('secret-token '+PEM);return {ok:out.status>=200&&out.status<300,status:out.status,text:async()=>JSON.stringify(out.data)};}}
   if(path==='/app'){const slug=options.slug||(account.account==='reviewinbox'?'reviewinboxoppiexyz':'oppie-agent-'+account.account);data={id:options.wrongApp?9:account.app_id,slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/'+slug};}
   else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||perms};
-  else if(path.endsWith('/access_tokens'))data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
-  else if(path==='/installation/repositories')data=options.repositories||repos;
+  else if(path.endsWith('/access_tokens')){
+   data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
+   const requested=JSON.parse(init.body).repository_ids;
+   const installed=account.account==='reviewinbox'?riSet(riInstall):repos;
+   const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
+   tokenRepositories.set('Bearer '+data.token,{total_count:selected.length,repositories:selected});
+  }
+  else if(path==='/installation/repositories')data=options.repositories||tokenRepositories.get(init.headers.Authorization);
   else if(path.endsWith('/pulls/7'))data={number:7,head:{sha:options.head||SHA},state:'open',draft:!!options.draft};
   else if(path==='/repos/good-night-oppie/MontClip')data={default_branch:'main'};
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
@@ -138,4 +144,17 @@ test('writes to default branch and stale files refused',async()=>{
 test('failed credential provider does not expose error content',async()=>{
  const client=createClient({credentials:async()=>{throw Error('SECRET');},fetch:async()=>{throw Error('unexpected');}});
  assert.deepEqual(await client.run(input('identity')),{ok:false,errorCode:'CREDENTIAL_UNAVAILABLE',execution:'not_executed'});
+});
+
+const riInstall={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
+function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||repos)};}});}
+test('ReviewInbox validates six installation repos while minting original two-repo execution token',async()=>{
+ const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,6);assert.equal(r.result.repositories.length,2);
+ const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(REPOSITORIES).sort());assert.deepEqual(request.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
+});
+test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail closed',async()=>{
+ const full=riSet(riInstall);
+ for(const extra of [{install:repos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:full}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
+ for(const repo of ['montclip-rsi','rsi-playbooks','oppie-github','sglang-review-inbox']){const f=riFixture();assert.equal((await f.client.run({account:'reviewinbox',repo,operation:'identity',args:{}})).ok,false);assert.equal(f.credentialsCalls(),0);}
 });
