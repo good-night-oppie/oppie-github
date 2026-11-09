@@ -70,11 +70,12 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now}=
     case 'create_pull':exact(args,['title','body','head','base','draft']);body={title:nonempty(args.title,256),body:str(args.body??'',65000),head:ref(args.head),base:ref(args.base),draft:args.draft===undefined?true:args.draft};if(typeof body.draft!=='boolean'||body.head===body.base)bad();method='POST';route=root+'/pulls';break;
     case 'update_pull':exact(args,['number','title','body','state']);body={};if(args.title!==undefined)body.title=nonempty(args.title,256);if(args.body!==undefined)body.body=str(args.body,65000);if(args.state!==undefined){if(!['open','closed'].includes(args.state))bad();body.state=args.state;}if(!Object.keys(body).length)bad();method='PATCH';route=root+'/pulls/'+number();break;
     case 'submit_review':{
-     exact(args,['number','commit_id','event','body','comments']);if(!['COMMENT','APPROVE','REQUEST_CHANGES'].includes(args.event))bad();
+     exact(args,['number','commit_id','event','body','comments','draft_request']);
+     if(args.draft_request!==undefined){if(account.account!=='reviewinbox'||args.event!=='COMMENT')bad('DRAFT_REQUEST_NOT_ALLOWED');nonempty(args.draft_request,2000);}if(!['COMMENT','APPROVE','REQUEST_CHANGES'].includes(args.event))bad();
      body={commit_id:sha(args.commit_id),event:args.event,body:str(args.body??'',65000)};
      if(args.comments!==undefined){if(!Array.isArray(args.comments)||args.comments.length>30)bad();body.comments=args.comments.map(c=>{exact(c,['path','line','side','body','start_line','start_side']);filePath(c.path);if(!['LEFT','RIGHT'].includes(c.side))bad();const v={path:c.path,line:positive(c.line),side:c.side,body:nonempty(c.body,10000)};if(c.start_line!==undefined){v.start_line=positive(c.start_line);if(!['LEFT','RIGHT'].includes(c.start_side)||v.start_line>v.line)bad();v.start_side=c.start_side;}return v;});}
      if(args.event!=='APPROVE'&&!body.body.trim()&&!body.comments?.length)bad();
-     method='POST';route=root+'/pulls/'+number()+'/reviews';preflight={kind:'review',number:number(),sha:body.commit_id};break;
+     method='POST';route=root+'/pulls/'+number()+'/reviews';preflight={kind:'review',number:number(),sha:body.commit_id,requestedDraft:args.draft_request!==undefined};break;
     }
     case 'create_branch':exact(args,['branch','sha']);body={ref:'refs/heads/'+ref(args.branch),sha:sha(args.sha)};method='POST';route=root+'/git/refs';preflight={kind:'branch',branch:args.branch};break;
     case 'update_file':exact(args,['path','branch','expected_sha','message','content_base64']);filePath(args.path);ref(args.branch);if(!Object.hasOwn(args,'expected_sha')||(args.expected_sha!==null&&!/^[a-f0-9]{40}$/i.test(args.expected_sha)))bad();if(typeof args.content_base64!=='string'||args.content_base64.length>700000||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.content_base64))bad();body={message:nonempty(args.message,500),content:args.content_base64,branch:args.branch,...(args.expected_sha?{sha:args.expected_sha}:{})};method='PUT';route=root+'/contents/'+filePath(args.path);preflight={kind:'file',branch:args.branch,sha:args.expected_sha,path:args.path};break;
@@ -112,7 +113,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now}=
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
    const repos=await api('/installation/repositories?per_page=100',token);
    if(!exactRepos(repos))bad('REPOSITORY_SCOPE_MISMATCH');
-   if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
+   if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||(pr?.draft&&!preflight.requestedDraft))bad('PR_NOT_REVIEWABLE');}
    if(preflight?.kind==='branch'||preflight?.kind==='file'){
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(preflight.kind==='file'){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');}

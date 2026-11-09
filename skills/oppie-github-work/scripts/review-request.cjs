@@ -4,9 +4,9 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
-// github-agent-plugin/node/core.cjs
+// node/core.cjs
 var require_core = __commonJS({
-  "github-agent-plugin/node/core.cjs"(exports2, module2) {
+  "node/core.cjs"(exports2, module2) {
     "use strict";
     var crypto = require("node:crypto");
     var OWNER = "good-night-oppie";
@@ -239,7 +239,11 @@ var require_core = __commonJS({
               route = root + "/pulls/" + number();
               break;
             case "submit_review": {
-              exact(args, ["number", "commit_id", "event", "body", "comments"]);
+              exact(args, ["number", "commit_id", "event", "body", "comments", "draft_request"]);
+              if (args.draft_request !== void 0) {
+                if (account.account !== "reviewinbox" || args.event !== "COMMENT") bad("DRAFT_REQUEST_NOT_ALLOWED");
+                nonempty(args.draft_request, 2e3);
+              }
               if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(args.event)) bad();
               body = { commit_id: sha(args.commit_id), event: args.event, body: str(args.body ?? "", 65e3) };
               if (args.comments !== void 0) {
@@ -260,7 +264,7 @@ var require_core = __commonJS({
               if (args.event !== "APPROVE" && !body.body.trim() && !body.comments?.length) bad();
               method = "POST";
               route = root + "/pulls/" + number() + "/reviews";
-              preflight = { kind: "review", number: number(), sha: body.commit_id };
+              preflight = { kind: "review", number: number(), sha: body.commit_id, requestedDraft: args.draft_request !== void 0 };
               break;
             }
             case "create_branch":
@@ -346,7 +350,7 @@ var require_core = __commonJS({
           if (preflight?.kind === "review") {
             const pr = await api(root + "/pulls/" + preflight.number, token);
             if (pr?.head?.sha !== preflight.sha) bad("STALE_HEAD");
-            if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
+            if (pr?.state !== "open" || pr?.draft && !preflight.requestedDraft) bad("PR_NOT_REVIEWABLE");
           }
           if (preflight?.kind === "branch" || preflight?.kind === "file") {
             const metadata = await api(root, token);
@@ -375,9 +379,9 @@ var require_core = __commonJS({
   }
 });
 
-// github-agent-plugin/node/linux-security.cjs
+// node/linux-security.cjs
 var require_linux_security = __commonJS({
-  "github-agent-plugin/node/linux-security.cjs"(exports2, module2) {
+  "node/linux-security.cjs"(exports2, module2) {
     "use strict";
     var fs = require("node:fs/promises");
     var constants = require("node:fs").constants;
@@ -547,9 +551,9 @@ var require_linux_security = __commonJS({
   }
 });
 
-// github-agent-plugin/node/store.cjs
+// node/store.cjs
 var require_store = __commonJS({
-  "github-agent-plugin/node/store.cjs"(exports2, module2) {
+  "node/store.cjs"(exports2, module2) {
     "use strict";
     var fs = require("node:fs/promises");
     var path = require("node:path");
@@ -841,9 +845,9 @@ var require_store = __commonJS({
   }
 });
 
-// github-agent-plugin/deployment.json
+// deployment.json
 var require_deployment = __commonJS({
-  "github-agent-plugin/deployment.json"(exports2, module2) {
+  "deployment.json"(exports2, module2) {
     module2.exports = {
       accounts: [
         "bb",
@@ -864,7 +868,7 @@ var require_deployment = __commonJS({
   }
 });
 
-// github-agent-plugin/src/review-cli.cjs
+// src/review-cli.cjs
 var { createClient } = require_core();
 var store = require_store();
 var deployment = require_deployment();

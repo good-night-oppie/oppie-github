@@ -41,3 +41,9 @@ Lovable: https://docs.lovable.dev/integrations/github
 Claude Design Import: https://github.com/apps/claude-design-import
 
 These are design references; no third-party subscription or integration is created by this plugin.
+
+## Explicitly requested Draft COMMENT (candidate)
+
+ReviewInbox may pass `draft_request` with a nonempty, verifiable human request reference to submit_review. The caller must establish an actual Slack/manual request or human action for this PR; do not set it for automatic discovery, queue intake or a model suggestion. This is caller-supplied provenance, not host-attested authorization. The plugin permits it only for account reviewinbox and event COMMENT, still checks open/current head, and strips it from the GitHub request body. Missing provenance preserves Draft rejection; APPROVE and other accounts remain disallowed for this override.
+
+Inbox integration must preserve original trigger provenance. Installed 1.2.1 does not implement this field and must fail closed until a separately reviewed plugin version is installed and the pinned Skill hash is revalidated. No shared gh fallback.

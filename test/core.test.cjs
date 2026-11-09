@@ -139,3 +139,15 @@ test('failed credential provider does not expose error content',async()=>{
  const client=createClient({credentials:async()=>{throw Error('SECRET');},fetch:async()=>{throw Error('unexpected');}});
  assert.deepEqual(await client.run(input('identity')),{ok:false,errorCode:'CREDENTIAL_UNAVAILABLE',execution:'not_executed'});
 });
+
+test('ReviewInbox explicit human draft request permits COMMENT only and never forwards provenance',async()=>{
+ const args={number:7,commit_id:SHA,event:'COMMENT',body:'Requested review',draft_request:'https://github.com/good-night-oppie/MontClip/issues/7#issuecomment-123'};
+ const f=fixture({draft:true,account:"reviewinbox"});const r=await f.client.run(input('submit_review',args,'reviewinbox'));
+ assert.equal(r.ok,true);assert.equal(f.calls.at(-1).parsed.draft_request,undefined);
+ for(const [account,overrides] of [['reviewinbox',{draft_request:''}],['reviewinbox',{event:'APPROVE'}],['qq',{}],['reviewinbox',{draft_request:true}]]){
+  const x=fixture({draft:true,account});const out=await x.client.run(input('submit_review',{...args,...overrides},account));
+  assert.equal(out.ok,false);assert.equal(x.calls.some(c=>c.method==='POST'&&c.path.endsWith('/reviews')),false);
+ }
+ const stale=fixture({draft:true,account:'reviewinbox',head:'b'.repeat(40)});
+ assert.equal((await stale.client.run(input('submit_review',args,'reviewinbox'))).ok,false);
+});
