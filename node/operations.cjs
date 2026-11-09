@@ -1,6 +1,6 @@
 'use strict';
 module.exports={
- identity:'{}; verifies App, installation, permissions and exactly two repositories',
+ identity:'{}; verifies App, installation, permissions and per-account installation/execution repository sets',
  get_contents:'{path?:string,ref?:branchOrSha}; bounded repository file/directory read',
  list_branches:'{page?:integer,per_page?:1..100}',
  list_issues:'{state?:open|closed|all,page?:integer,per_page?:1..100}',
@@ -17,6 +17,6 @@ module.exports={
  submit_review:'{number:integer,commit_id:40hex,event:COMMENT|APPROVE|REQUEST_CHANGES,body:string,comments?:array}; checks live head; do not retry unknown outcome. Automatic review uses COMMENT only.',
  create_branch:'{branch:string,sha:40hex}; never writes the default branch',
  update_file:'{path:string,branch:string,expected_sha:null|40hex,message:string,content_base64:string}; optimistic concurrency; include Assisted-by: Cindy (https://cindy.app) in AI-assisted commit message',
- admin_get:'{}; QQ only',
- admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ only; requires explicit user request for these settings'
+ admin_get:'{}; QQ or PG within their distinct operation allowlists',
+ admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ or PG within their distinct operation allowlists; requires explicit user request for these settings'
 };
