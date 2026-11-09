@@ -5,15 +5,14 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过独立 GitHub App 操作 MontClip 两仓的 Issue、PR 和代码；ReviewInbox 用 ReviewInboxOppieXYZ 发表 Agent COMMENT 评审时。",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "command": "oppie-github",
   "entry": "main.js",
-  "launch": "on-demand",
+  "launch": "resident",
   "node": {
     "entry": "node/runtime.cjs",
     "protocol": "json-rpc-stdio",
-    "lifecycle": "on-demand",
-    "idleTimeoutSeconds": 120
+    "lifecycle": "resident"
   },
   "tools": [
     {
@@ -198,6 +197,27 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "inbox_service",
+      "description": "管理插件拥有的隔离只读 Inbox 预览：启动、健康状态、停止。不会接管既有 Inbox，也不启用评审流水线。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "status",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
     }
   ],
   "manual": {
@@ -218,5 +238,5 @@
       }
     ]
   },
-  "releaseNotes": "新增 ReviewInboxOppieXYZ 独立评审身份（COMMENT-only、代码只读）；兼容既有 App 的 OppieXYZ 改名；修复提升权限环境新建凭据文件的所有者。"
+  "releaseNotes": "候选：插件主仓固定 Inbox 子模块，受管联启隔离只读预览；评审流水线尚未接入，不替换现有实例。"
 }
