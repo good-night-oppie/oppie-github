@@ -23,7 +23,7 @@ function fixture(options={}){
   else if(path.endsWith('/access_tokens')){
    data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
    const requested=JSON.parse(init.body).repository_ids;
-   const installed=account.account==='reviewinbox'?riSet(riInstall):repos;
+   const installed=account.account==='reviewinbox'?riSet(riInstall):account.account==='qq'?qqRepoSet:repos;
    const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
    tokenRepositories.set('Bearer '+data.token,{total_count:selected.length,repositories:selected});
   }
@@ -33,7 +33,7 @@ function fixture(options={}){
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
   return {ok:status===200,status,text:async()=>JSON.stringify(data)};
  };
- return {calls,client:createClient({credentials:async alias=>{credentialsCalls++;assert.equal(alias,account.account);return PEM;},fetch,now:()=>NOW}),credentialsCalls:()=>credentialsCalls};
+ return {calls,client:createClient({credentials:async alias=>{credentialsCalls++;assert.equal(alias,account.account);return PEM;},fetch,now:()=>NOW,authorize:options.authorize,claimAuthorization:options.claimAuthorization|| (async()=>true)}),credentialsCalls:()=>credentialsCalls};
 }
 const input=(operation,args={},account='bb')=>({account,repo:'MontClip',operation,args});
 test('JWT is RSA signed, short lived, and names fixed app id',()=>{
@@ -112,9 +112,9 @@ test('ReviewInbox does not accept invented legacy slug or elevated installation 
 test('extra permissions, extra repositories and duplicate repos fail closed',async()=>{
  for(const option of [{permissions:{...expected,administration:'write'}},{repositories:{...repos,total_count:3}},{repositories:{total_count:2,repositories:[repos.repositories[0],repos.repositories[0]]}}]){const f=fixture(option);const r=await f.client.run(input('identity'));assert.equal(r.ok,false);assert.ok(['PERMISSION_MISMATCH','REPOSITORY_SCOPE_MISMATCH'].includes(r.errorCode));}
 });
-test('ordinary account cannot request admin; QQ is explicit and carries only approved permissions',async()=>{
+test('ordinary account cannot request admin; QQ uses ruleset-only administration',async()=>{
  const f=fixture();assert.equal((await f.client.run(input('admin_get'))).errorCode,'ADMIN_ACCOUNT_REQUIRED');assert.equal(f.calls.length,0);
- const q=fixture({account:'qq'});const r=await q.client.run(input('admin_update',{allow_squash_merge:true},'qq'));assert.equal(r.ok,true);assert.equal(r.receipt.account,'qq');assert.equal(q.calls.at(-1).method,'PATCH');
+ const q=fixture({account:'qq'});const r=await q.client.run(input('list_rulesets',{},'qq'));assert.equal(r.ok,true);assert.equal(r.receipt.account,'qq');assert.equal(q.calls.at(-1).method,'GET');
  assert.equal((await q.client.run(input('admin_update',{delete_repository:true},'qq'))).ok,false);
 });
 test('stale head or draft never submits a review',async()=>{
@@ -146,6 +146,31 @@ test('failed credential provider does not expose error content',async()=>{
  assert.deepEqual(await client.run(input('identity')),{ok:false,errorCode:'CREDENTIAL_UNAVAILABLE',execution:'not_executed'});
 });
 
+const qqRepos={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const qqRepoSet={total_count:6,repositories:Object.entries(qqRepos).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))};
+test('QQ six-repo identity narrows contents permission and permits permission supersets',async()=>{const f=fixture({account:'qq',repositories:qqRepoSet,permissions:{...expected,administration:'write',checks:'write'}});const r=await f.client.run({...input('identity',{},'qq'),repo:'oppie-github'});assert.equal(r.ok,true);const p=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.equal(p.permissions.contents,'read');assert.deepEqual(p.repository_ids.sort(),Object.values(qqRepos).sort());});
+test('QQ denies authoring and unconfirmed admin before credentials, other aliases cannot use QQ operations',async()=>{for(const operation of ['create_pull','update_pull','update_file','create_branch','create_issue','comment_issue','admin_update','ruleset_update']){const f=fixture({account:'qq'});assert.equal((await f.client.run(input(operation,{},'qq'))).ok,false);assert.equal(f.credentialsCalls(),0);}const f=fixture();assert.equal((await f.client.run(input('list_rulesets'))).ok,false);assert.equal(f.credentialsCalls(),0);});
+
+test('QQ ruleset mutation needs live trusted confirmation and a structured owner reference',async()=>{
+ const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};
+ for(const extra of [{},{authorize:async()=>false}]){const f=fixture({account:'qq',...extra});assert.equal((await f.client.run(input('ruleset_update',args,'qq'))).ok,false);assert.equal(f.credentialsCalls(),0);}
+ const f=fixture({account:'qq',authorize:async()=>true,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{id:3278807,login:'EdwardTang',type:'User'},created_at:new Date(NOW-1000).toISOString(),body:require('../node/owner-authorization.cjs').requiredLine('MontClip',args)}};}});const r=await f.client.run(input('ruleset_update',args,'qq'));assert.equal(r.ok,true);assert.equal(f.calls.at(-1).method,'PUT');assert.deepEqual(f.calls.at(-1).parsed,{enforcement:'active'});
+ const bad=fixture({account:'qq',authorize:async()=>true});assert.equal((await bad.client.run(input('ruleset_update',{...args,nonce:'a'.repeat(32),owner_authorization:'approved'},'qq'))).ok,false);assert.equal(bad.credentialsCalls(),0);
+});
+test('QQ unexpected repos and insufficient permission fail closed',async()=>{
+ for(const options of [{repositories:repos},{repositories:{...qqRepoSet,repositories:[...qqRepoSet.repositories.slice(1),qqRepoSet.repositories[1]]}},{permissions:{...expected,pull_requests:'read',administration:'write'}}])assert.equal((await fixture({account:'qq',...options}).client.run(input('identity',{},'qq'))).ok,false);
+});
+test('QQ dismissal is bounded to a review and enqueue binds current head',async()=>{
+ const f=fixture({account:'qq'});assert.equal((await f.client.run(input('dismiss_review',{number:7,review_id:4,message:'Owner requested dismissal'},'qq'))).ok,true);assert.ok(f.calls.at(-1).path.endsWith('/pulls/7/reviews/4/dismissals'));
+ const q=fixture({account:'qq',override(path){if(path.endsWith('/pulls/7'))return {status:200,data:{node_id:'PR_test',state:'open',draft:false,head:{sha:SHA}}};if(path==='/graphql')return {status:200,data:{data:{enqueuePullRequest:{mergeQueueEntry:{id:'MQ_test'}}}}};}});
+ const r=await q.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));assert.equal(r.ok,true);assert.deepEqual(q.calls.at(-1).parsed.variables,{id:'PR_test',head:SHA});
+});
+
+test('QQ refuses nonexistent or non-owner authorization references even after confirmation',async()=>{const f=fixture({account:'qq',authorize:async()=>true});const r=await f.client.run(input('ruleset_update',{ruleset_id:1,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'},'qq'));assert.equal(r.errorCode,'OWNER_REFERENCE_UNVERIFIED');assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
+
+test('ruleset update rejects an expired owner comment before PUT',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{id:3278807,type:'User'},created_at:'2000-01-01T00:00:00Z',body:'old'}};}});assert.equal((await f.client.run(input('ruleset_update',args,'qq'))).ok,false);assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
+
+test('consumed owner nonce cannot produce a second ruleset write',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,claimAuthorization:async()=>false,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{login:'EdwardTang',id:3278807,type:'User'},created_at:new Date(NOW-1000).toISOString(),body:require('../node/owner-authorization.cjs').requiredLine('MontClip',args)}};}});const r=await f.client.run(input('ruleset_update',args,'qq'));assert.equal(r.errorCode,'OWNER_AUTHORIZATION_REPLAYED');assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
 const riInstall={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
 const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
 function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||repos)};}});}

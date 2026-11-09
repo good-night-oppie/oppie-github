@@ -1,0 +1,8 @@
+'use strict';
+const crypto=require('node:crypto'),fs=require('node:fs/promises'),path=require('node:path');
+function canonical(value){if(Array.isArray(value))return value.map(canonical);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])]));return value;}
+function parametersHash(args){return crypto.createHash('sha256').update(JSON.stringify(canonical({ruleset_id:args.ruleset_id,ruleset:args.ruleset}))).digest('hex');}
+function requiredLine(repo,args){return `authorize ruleset_update good-night-oppie/${repo} ${args.nonce} parameters-sha256:${parametersHash(args)}`;}
+function validateProof(proof,repo,args,now){const created=Date.parse(proof?.created_at);return proof?.html_url===args.owner_authorization&&proof?.user?.login==='EdwardTang'&&proof?.user?.id===3278807&&proof?.user?.type==='User'&&Number.isFinite(created)&&created<=now&&created>=now-86400000&&typeof proof.body==='string'&&proof.body.split(/\r?\n/).includes(requiredLine(repo,args));}
+async function claimNonce(root,nonce){if(!/^[a-f0-9]{32}$/.test(nonce))throw Error('INVALID_NONCE');await fs.mkdir(root,{recursive:true,mode:0o700});const st=await fs.lstat(root);if(st.isSymbolicLink()||!st.isDirectory()||(await fs.realpath(root)).toLowerCase()!==path.resolve(root).toLowerCase())throw Error('UNSAFE_NONCE_STORE');try{await fs.writeFile(path.join(root,nonce+'.json'),JSON.stringify({state:'consumed-before-write',at:new Date().toISOString()}),{flag:'wx',mode:0o600});return true;}catch(e){if(e.code==='EEXIST')return false;throw e;}}
+module.exports={parametersHash,requiredLine,validateProof,claimNonce};

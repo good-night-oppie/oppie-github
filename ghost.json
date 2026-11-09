@@ -5,7 +5,7 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过独立 GitHub App 操作 MontClip 两仓的 Issue、PR 和代码；ReviewInbox 用 ReviewInboxOppieXYZ 发表 Agent COMMENT 评审时。",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
@@ -97,7 +97,11 @@
             "type": "string",
             "enum": [
               "MontClip",
-              "MontClip-Cindy"
+              "MontClip-Cindy",
+              "montclip-rsi",
+              "rsi-playbooks",
+              "oppie-github",
+              "sglang-review-inbox"
             ]
           },
           "operation": {
@@ -238,5 +242,6 @@
       }
     ]
   },
-  "releaseNotes": "候选：插件主仓固定 Inbox 子模块，受管联启隔离只读预览；评审流水线尚未接入，不替换现有实例。"
+  "releaseNotes": "候选：保留受管只读 Inbox 和 ReviewInbox 六仓安装/两仓执行；新增 QQ 六仓审查白名单及逐次主人授权，未安装。",
+  "confirm": true
 }

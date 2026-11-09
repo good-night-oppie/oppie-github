@@ -4,7 +4,7 @@ const {createQueue,REPOS,LEASE_MS}=require('../node/review-queue.cjs');
 const A='a'.repeat(40),B='b'.repeat(40);
 const pr=(number,sha=A,user='oppie-agent-deja[bot]',draft=false)=>({number,head:{sha},user:{login:user},title:'Review '+number,state:'open',draft});
 async function fixture(t){
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'oppie-queue-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'oppie-queue-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  let time=1800000000000;const lists=new Map(REPOS.map(r=>[r,[]]));const reviews=new Map();const calls=[];let failure=false;
  const client={run:async input=>{calls.push(input);if(failure)return {ok:false,errorCode:'NETWORK_ERROR'};let result;
   if(input.operation==='list_pulls')result=lists.get(input.repo).slice((input.args.page-1)*100,input.args.page*100);
