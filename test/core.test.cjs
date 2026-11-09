@@ -10,7 +10,7 @@ const expected={contents:'write',issues:'write',pull_requests:'write',metadata:'
 const repos={total_count:2,repositories:Object.entries(REPOSITORIES).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
 const SHA='a'.repeat(40);
 function fixture(options={}){
- const calls=[];let credentialsCalls=0;let counter=0;
+ const calls=[];const tokenRepositories=new Map();let credentialsCalls=0;let counter=0;
  const account=ACCOUNTS[options.account||'bb']||(options.account==='reviewinbox'?{account:'reviewinbox',app_id:5687106,installation_id:180305629,admin:false}:undefined);
  const perms={...expected,...(account.account==='reviewinbox'?{contents:'read'}:{}),...(account.admin?{administration:'write'}:{})};
  const fetch=async(url,init)=>{
@@ -20,8 +20,14 @@ function fixture(options={}){
   if(options.override){const out=await options.override(path,init,calls);if(out){if(out.throw)throw Error('secret-token '+PEM);return {ok:out.status>=200&&out.status<300,status:out.status,text:async()=>JSON.stringify(out.data)};}}
   if(path==='/app'){const slug=options.slug||(account.account==='reviewinbox'?'reviewinboxoppiexyz':'oppie-agent-'+account.account);data={id:options.wrongApp?9:account.app_id,slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/'+slug};}
   else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||perms};
-  else if(path.endsWith('/access_tokens'))data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
-  else if(path==='/installation/repositories')data=options.repositories||(account.account==='reviewinbox'&&counter%2===1?riSet(riInstall):repos);
+  else if(path.endsWith('/access_tokens')){
+   data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
+   const requested=JSON.parse(init.body).repository_ids;
+   const installed=account.account==='reviewinbox'?riSet(riInstall):repos;
+   const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
+   tokenRepositories.set('Bearer '+data.token,{total_count:selected.length,repositories:selected});
+  }
+  else if(path==='/installation/repositories')data=options.repositories||tokenRepositories.get(init.headers.Authorization);
   else if(path.endsWith('/pulls/7'))data={number:7,head:{sha:options.head||SHA},state:'open',draft:!!options.draft};
   else if(path==='/repos/good-night-oppie/MontClip')data={default_branch:'main'};
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
