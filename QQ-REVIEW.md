@@ -22,14 +22,14 @@ This retains the existing explicit-account architecture: it is not Host-attested
 
 Red test observed six-repo QQ identity rejection before implementation. Initial full suite80passed; final focused27passed after adding owner-reference verification; final full result recorded at delivery. Pinned esbuild0.27.0+lock/build/check used, no manual bundle edits. Live candidate identity through QQ App succeeded with six repos and contents:read/minimal requested permissions. No actual enqueue/dismiss/review/ruleset mutation executed.
 
-Official docs specify pull_requests:write for dismiss, metadata:read for ruleset reads and administration:write for updates. Enqueue GraphQL requires pullRequestId; candidate also uses expectedHeadOid. Exact fine-grained enqueue permission with contents:read was not proven; lack of capability must fail, never request broader contents or fall back to a human login. Rulesets may be unavailable for the organization's private free-plan repos; no plan/visibility change is authorized here.
+Official docs specify pull_requests:write for dismiss, metadata:read for ruleset reads and administration:write for updates. Enqueue GraphQL requires pullRequestId; candidate also uses expectedHeadOid. Exact fine-grained enqueue permission with contents:read was not proven; lack of capability must fail, never request broader contents or fall back to a human login. The owner has made both source repositories public and configured main protection. Required CI checks are a separate repository-administration follow-up after the workflow reaches main; this source change does not modify repository settings.
 
 This branch is independent of pending Draft, managed-service, PG and ReviewInbox recovery PRs. Do not install it over a runtime containing those changes without explicit integration and review. Production credentials, scopes, schedules and Inbox are untouched.
 
 
 ## Verifiable one-use owner directive
 
-QQ supplied corrected source references: owner message uoo5v4wps4x67s56htfyk3cr in session c40a7fc6-d41d-4332-b4b1-0cce4f529aea at2026-11-09T23:05:28Z; earlier installation message ige9rh779hlnfk2cxihcspqf at22:30:49Z. These session IDs are audit context only, not plugin authorization evidence. No screenshot is exported.
+The owner's scope decisions are retained in private audit records. Internal conversation/message identifiers and screenshots are not published here. Those records are not a substitute for the plugin's per-action authorization checks.
 
 For each ruleset update, the owner posts a GitHub comment in the target repo or MontClip containing one exact line:
 
@@ -51,7 +51,7 @@ Local merged-tree validation:94/94 tests passed, including real isolated Inbox p
 
 ## Consolidated CI follow-up
 
-Owner closed PR#1/#3 and directed subsequent plugin work to this PR#5. Included the CLI child-env NODE_DEBUG isolation, checkout submodules:true, setup-python3.12 and OPPIE_TEST_PYTHON resolved from sys.executable. Private submodule checkout needs CI-only INBOX_SOURCE_READ_TOKEN with read access to this repository and sglang-review-inbox; no local App keys are copied to Actions. Missing access is a failure, not skipped coverage.
+Owner closed PR#1/#3 and directed subsequent plugin work to this PR#5. Included the CLI child-env NODE_DEBUG isolation, checkout submodules:true, setup-python3.12 and OPPIE_TEST_PYTHON resolved from sys.executable. Both source repositories are now public, so normal submodule checkout uses the default workflow token. No local App keys or custom token secret are copied to Actions.
 
 Windows negative reproduction showed newly created objects may carry explicit broad Administrators/Users ACEs, which /inheritance:r does not remove. tightenNew now removes non-owner/non-SYSTEM Allow ACEs on ONLY its newly-created object, then applies the unchanged strict verification. Existing stores remain verify-only and reject unsafe ACLs; no global ACL or actual account store was modified by these tests. New synthetic directory/file regression failed before the fix and passes after. The helper export exists for isolated native tests, not as a plugin tool.
 
