@@ -21,7 +21,7 @@ module.exports={
  admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ only; requires explicit user request for these settings',
  list_rulesets:'{}; QQ only',
  get_ruleset:'{ruleset_id:integer}; QQ only',
- ruleset_update:'{ruleset_id:integer,ruleset:object,owner_authorization_ref:GitHub comment URL}; QQ only; max160-byte JSON change, Host confirmation each call; no cached approval',
+ ruleset_update:'{ruleset_id:integer,ruleset:object,owner_authorization:GitHub comment URL,nonce:32hex}; QQ only; max160-byte JSON change, 24h exact owner directive + one-use nonce + Host confirmation each call',
  dismiss_review:'{number:integer,review_id:integer,message:string}; QQ only',
  enqueue_pull:'{number:integer,commit_id:40hex}; QQ only; no auto-merge fallback',
 };

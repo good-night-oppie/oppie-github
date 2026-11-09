@@ -14,7 +14,7 @@ async function dispatch(method,args){
  if(method==='run_confirmed'){
   const {input,confirmation}=args;
   if(!deployment.accounts.includes('qq')||input?.account!=='qq'||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)throw Error('OWNER_CONFIRMATION_REQUIRED');
-  return createClient({credentials:async a=>(await store.load(a)).privateKey,authorize:async()=>true}).run(input);
+  return createClient({credentials:async a=>(await store.load(a)).privateKey,authorize:async()=>true,claimAuthorization:async nonce=>{await store.list();return require('./owner-authorization.cjs').claimNonce(path.join(store.paths.root,'qq-authorization-nonces'),nonce);}}).run(input);
  }
  if(['run','import'].includes(method)&&!deployment.accounts.includes(args.account))return {ok:false,errorCode:'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST',execution:'not_executed'};
  if(method==='author_cue')return require('./author-cue.cjs').planAuthorCues(args);

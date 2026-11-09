@@ -4,11 +4,51 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
+// node/owner-authorization.cjs
+var require_owner_authorization = __commonJS({
+  "node/owner-authorization.cjs"(exports2, module2) {
+    "use strict";
+    var crypto = require("node:crypto");
+    var fs = require("node:fs/promises");
+    var path = require("node:path");
+    function canonical(value) {
+      if (Array.isArray(value)) return value.map(canonical);
+      if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonical(value[k])]));
+      return value;
+    }
+    function parametersHash(args) {
+      return crypto.createHash("sha256").update(JSON.stringify(canonical({ ruleset_id: args.ruleset_id, ruleset: args.ruleset }))).digest("hex");
+    }
+    function requiredLine(repo, args) {
+      return `authorize ruleset_update good-night-oppie/${repo} ${args.nonce} parameters-sha256:${parametersHash(args)}`;
+    }
+    function validateProof(proof, repo, args, now) {
+      const created = Date.parse(proof?.created_at);
+      return proof?.html_url === args.owner_authorization && proof?.user?.login === "EdwardTang" && proof?.user?.id === 3278807 && proof?.user?.type === "User" && Number.isFinite(created) && created <= now && created >= now - 864e5 && typeof proof.body === "string" && proof.body.split(/\r?\n/).includes(requiredLine(repo, args));
+    }
+    async function claimNonce(root, nonce) {
+      if (!/^[a-f0-9]{32}$/.test(nonce)) throw Error("INVALID_NONCE");
+      await fs.mkdir(root, { recursive: true, mode: 448 });
+      const st = await fs.lstat(root);
+      if (st.isSymbolicLink() || !st.isDirectory() || (await fs.realpath(root)).toLowerCase() !== path.resolve(root).toLowerCase()) throw Error("UNSAFE_NONCE_STORE");
+      try {
+        await fs.writeFile(path.join(root, nonce + ".json"), JSON.stringify({ state: "consumed-before-write", at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx", mode: 384 });
+        return true;
+      } catch (e) {
+        if (e.code === "EEXIST") return false;
+        throw e;
+      }
+    }
+    module2.exports = { parametersHash, requiredLine, validateProof, claimNonce };
+  }
+});
+
 // node/core.cjs
 var require_core = __commonJS({
   "node/core.cjs"(exports2, module2) {
     "use strict";
     var crypto = require("node:crypto");
+    var { validateProof } = require_owner_authorization();
     var OWNER = "good-night-oppie";
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_REPOSITORIES = Object.freeze({ ...REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
@@ -134,7 +174,7 @@ var require_core = __commonJS({
       if (obj(value)) return Object.fromEntries(Object.entries(value).filter(([k]) => !["token", "access_token", "private_key", "authorization"].includes(k.toLowerCase())).map(([k, v]) => [k, clean(v, secrets)]));
       return value;
     }
-    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false } = {}) {
+    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
         let secrets = [];
@@ -298,16 +338,17 @@ var require_core = __commonJS({
               route = root + "/rulesets/" + positive(args.ruleset_id);
               break;
             case "ruleset_update": {
-              exact(args, ["ruleset_id", "ruleset", "owner_authorization_ref"]);
+              exact(args, ["ruleset_id", "ruleset", "owner_authorization", "nonce"]);
               positive(args.ruleset_id);
-              if (typeof args.owner_authorization_ref !== "string" || !/^https:\/\/github\.com\/good-night-oppie\/[A-Za-z0-9_.-]+\/(issues|pull)\/[0-9]+#issuecomment-[0-9]+$/.test(args.owner_authorization_ref)) bad("OWNER_AUTHORIZATION_REQUIRED");
+              if (typeof args.nonce !== "string" || !/^([a-f0-9]{32})$/.test(args.nonce)) bad("INVALID_AUTHORIZATION_NONCE");
+              if (typeof args.owner_authorization !== "string" || !/^https:\/\/github\.com\/good-night-oppie\/[A-Za-z0-9_.-]+\/(issues|pull)\/[0-9]+#issuecomment-[0-9]+$/.test(args.owner_authorization)) bad("OWNER_AUTHORIZATION_REQUIRED");
               exact(args.ruleset, ["name", "target", "enforcement", "bypass_actors", "conditions", "rules"]);
               if (!Object.keys(args.ruleset).length || JSON.stringify(args.ruleset).length > 160) bad("RULESET_CHANGE_TOO_LARGE");
               if (!await authorize({ account: "qq", repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
               method = "PUT";
               route = root + "/rulesets/" + args.ruleset_id;
               body = args.ruleset;
-              preflight = { kind: "owner_reference", url: args.owner_authorization_ref };
+              preflight = { kind: "owner_reference", url: args.owner_authorization };
               break;
             }
             case "dismiss_review":
@@ -386,9 +427,10 @@ var require_core = __commonJS({
           if (!exactRepos(repos)) bad("REPOSITORY_SCOPE_MISMATCH");
           if (preflight?.kind === "owner_reference") {
             const match = preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
-            if (!match || !Object.hasOwn(expectedRepos, match[1])) bad("OWNER_REFERENCE_SCOPE");
+            if (!match || !Object.hasOwn(expectedRepos, match[1]) || ![repo, "MontClip"].includes(match[1])) bad("OWNER_REFERENCE_SCOPE");
             const proof = await api("/repos/" + OWNER + "/" + match[1] + "/issues/comments/" + match[2], token);
-            if (proof?.html_url !== preflight.url || proof?.user?.id !== 3278807 || proof?.user?.type !== "User") bad("OWNER_REFERENCE_UNVERIFIED");
+            if (!validateProof(proof, repo, args, now())) bad("OWNER_REFERENCE_UNVERIFIED");
+            if (!await claimAuthorization(args.nonce)) bad("OWNER_AUTHORIZATION_REPLAYED");
           }
           if (preflight?.kind === "enqueue") {
             const pr = await api(root + "/pulls/" + preflight.number, token);

@@ -7,8 +7,8 @@ cindy.onHostMessage(async function(message) {
     let method=methods[message.tool],params=message.args||{};
     if(message.tool==='github'&&params.account==='qq'&&params.operation==='ruleset_update'){
       const a=params.args||{};
-      if(typeof a.owner_authorization_ref!=='string'||!a.owner_authorization_ref)throw Error('OWNER_AUTHORIZATION_REQUIRED');
-      const body='本次授权 QQ 修改 '+params.repo+' ruleset '+a.ruleset_id+'：'+JSON.stringify(a.ruleset)+'\n引用：'+a.owner_authorization_ref;
+      if(typeof a.owner_authorization!=='string'||!a.owner_authorization)throw Error('OWNER_AUTHORIZATION_REQUIRED');
+      const body='本次授权 QQ 修改 '+params.repo+' ruleset '+a.ruleset_id+' nonce:'+a.nonce+'：'+JSON.stringify(a.ruleset)+'\n引用：'+a.owner_authorization;
       if(body.length>300)throw Error('CONFIRMATION_TOO_LARGE');
       const approval=await cindy.confirm({body,confirmText:'仅批准本次',cancelText:'取消',danger:true});
       if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');

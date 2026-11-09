@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
+const {validateProof}=require('./owner-authorization.cjs');
 const OWNER = 'good-night-oppie';
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_REPOSITORIES=Object.freeze({...REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
@@ -39,7 +40,7 @@ function makeJwt(account,pem,now=Date.now()){
 function listQuery(a,extra=[]){exact(a,['page','per_page',...extra]);const q=new URLSearchParams({page:String(a.page===undefined?1:positive(a.page)),per_page:String(a.per_page===undefined?30:positive(a.per_page))});if(Number(q.get('per_page'))>100)bad();return q;}
 function labels(value){if(!Array.isArray(value)||value.length>30)bad();return value.map(x=>nonempty(x,100));}
 function clean(value,secrets){if(typeof value==='string'){for(const secret of secrets)if(secret)value=value.split(secret).join('[REDACTED]');return value;}if(Array.isArray(value))return value.map(x=>clean(x,secrets));if(obj(value))return Object.fromEntries(Object.entries(value).filter(([k])=>!['token','access_token','private_key','authorization'].includes(k.toLowerCase())).map(([k,v])=>[k,clean(v,secrets)]));return value;}
-function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false}={}){
+function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
   let secrets=[];
@@ -85,11 +86,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'list_rulesets':exact(args,[]);route=root+'/rulesets?includes_parents=true';break;
     case 'get_ruleset':exact(args,['ruleset_id']);route=root+'/rulesets/'+positive(args.ruleset_id);break;
     case 'ruleset_update':{
-     exact(args,['ruleset_id','ruleset','owner_authorization_ref']);positive(args.ruleset_id);
-     if(typeof args.owner_authorization_ref!=='string'||!/^https:\/\/github\.com\/good-night-oppie\/[A-Za-z0-9_.-]+\/(issues|pull)\/[0-9]+#issuecomment-[0-9]+$/.test(args.owner_authorization_ref))bad('OWNER_AUTHORIZATION_REQUIRED');
+     exact(args,['ruleset_id','ruleset','owner_authorization','nonce']);positive(args.ruleset_id);if(typeof args.nonce!=='string'||!/^([a-f0-9]{32})$/.test(args.nonce))bad('INVALID_AUTHORIZATION_NONCE');
+     if(typeof args.owner_authorization!=='string'||!/^https:\/\/github\.com\/good-night-oppie\/[A-Za-z0-9_.-]+\/(issues|pull)\/[0-9]+#issuecomment-[0-9]+$/.test(args.owner_authorization))bad('OWNER_AUTHORIZATION_REQUIRED');
      exact(args.ruleset,['name','target','enforcement','bypass_actors','conditions','rules']);if(!Object.keys(args.ruleset).length||JSON.stringify(args.ruleset).length>160)bad('RULESET_CHANGE_TOO_LARGE');
      if(!await authorize({account:'qq',repo,operation,args}))bad('OWNER_CONFIRMATION_REQUIRED');
-     method='PUT';route=root+'/rulesets/'+args.ruleset_id;body=args.ruleset;preflight={kind:'owner_reference',url:args.owner_authorization_ref};break;
+     method='PUT';route=root+'/rulesets/'+args.ruleset_id;body=args.ruleset;preflight={kind:'owner_reference',url:args.owner_authorization};break;
     }
     case 'dismiss_review':exact(args,['number','review_id','message']);method='PUT';route=root+'/pulls/'+number()+'/reviews/'+positive(args.review_id)+'/dismissals';body={message:nonempty(args.message,1000)};break;
     case 'enqueue_pull':exact(args,['number','commit_id']);preflight={kind:'enqueue',number:number(),sha:sha(args.commit_id)};method='POST';route='/graphql';break;
@@ -129,9 +130,10 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(!exactRepos(repos))bad('REPOSITORY_SCOPE_MISMATCH');
    if(preflight?.kind==='owner_reference'){
     const match=preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
-    if(!match||!Object.hasOwn(expectedRepos,match[1]))bad('OWNER_REFERENCE_SCOPE');
+    if(!match||!Object.hasOwn(expectedRepos,match[1])||![repo,'MontClip'].includes(match[1]))bad('OWNER_REFERENCE_SCOPE');
     const proof=await api('/repos/'+OWNER+'/'+match[1]+'/issues/comments/'+match[2],token);
-    if(proof?.html_url!==preflight.url||proof?.user?.id!==3278807||proof?.user?.type!=='User')bad('OWNER_REFERENCE_UNVERIFIED');
+    if(!validateProof(proof,repo,args,now()))bad('OWNER_REFERENCE_UNVERIFIED');
+    if(!await claimAuthorization(args.nonce))bad('OWNER_AUTHORIZATION_REPLAYED');
    }
    if(preflight?.kind==='enqueue'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha||pr?.state!=='open'||pr?.draft||typeof pr.node_id!=='string')bad('STALE_OR_UNQUEUEABLE_HEAD');body={query:'mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}',variables:{id:pr.node_id,head:preflight.sha}};}
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
