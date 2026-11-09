@@ -4,13 +4,16 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
-// github-agent-plugin/node/core.cjs
+// node/core.cjs
 var require_core = __commonJS({
-  "github-agent-plugin/node/core.cjs"(exports2, module2) {
+  "node/core.cjs"(exports2, module2) {
     "use strict";
     var crypto = require("node:crypto");
     var OWNER = "good-night-oppie";
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
+    var PG_REPOSITORIES = Object.freeze({ ...REPOSITORIES, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
+    var PG_INSTALLATION_REPOSITORIES = Object.freeze({ ...PG_REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260 });
+    var executionRepositories = (account) => account.account === "pg" ? PG_REPOSITORIES : REPOSITORIES;
     var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
@@ -33,7 +36,7 @@ var require_core = __commonJS({
       app_slug: APP_NAMES[account].toLowerCase(),
       app_slug_status: "expected_not_live",
       allowed_slugs: Object.freeze(account === "reviewinbox" ? ["reviewinboxoppiexyz"] : ["oppie-agent-" + account, APP_NAMES[account].toLowerCase()]),
-      admin: account === "qq"
+      admin: account === "qq" || account === "pg"
     })])));
     function allowedAppSlug(account, slug) {
       return typeof slug === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.includes(slug);
@@ -86,10 +89,10 @@ var require_core = __commonJS({
       if (!x || x.startsWith("/") || /[\\%?#\x00-\x1f]/.test(x) || x.split("/").some((s) => !s || s === "." || s === "..")) bad("INVALID_PATH");
       return x.split("/").map(encodeURIComponent).join("/");
     }
-    function repoName(x) {
+    function repoName(x, allowed) {
       if (typeof x !== "string") bad("REPOSITORY_REQUIRED");
       const n = x.startsWith(OWNER + "/") ? x.slice(OWNER.length + 1) : x;
-      if (!Object.hasOwn(REPOSITORIES, n)) bad("REPOSITORY_NOT_ALLOWED");
+      if (!Object.hasOwn(allowed, n)) bad("REPOSITORY_NOT_ALLOWED");
       return n;
     }
     function permissions(a) {
@@ -135,15 +138,18 @@ var require_core = __commonJS({
       async function run(input2) {
         let secrets = [];
         try {
-          let exactRepos = function(r) {
-            return r?.total_count === 2 && Array.isArray(r.repositories) && r.repositories.length === 2 && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && REPOSITORIES[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === 2;
+          let exactRepos = function(r, expected) {
+            const count = Object.keys(expected).length;
+            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
           };
           exact(input2, ["account", "repo", "operation", "args"]);
           if (typeof input2.account !== "string" || !Object.hasOwn(ACCOUNTS, input2.account)) bad("ACCOUNT_REQUIRED");
           const account = ACCOUNTS[input2.account];
           const operation = input2.operation;
           if (!OPERATION_NAMES.includes(operation)) bad("UNKNOWN_OPERATION");
-          const repo = repoName(input2.repo);
+          const allowedRepos = executionRepositories(account);
+          const installedRepos = account.account === "pg" ? PG_INSTALLATION_REPOSITORIES : allowedRepos;
+          const repo = repoName(input2.repo, allowedRepos);
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
           if (account.account === "reviewinbox") {
@@ -335,14 +341,14 @@ var require_core = __commonJS({
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
-          if (!exactRepos(probe)) bad("REPOSITORY_SCOPE_MISMATCH");
-          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(REPOSITORIES), permissions: permissions(account) });
+          if (!exactRepos(probe, installedRepos)) bad("REPOSITORY_SCOPE_MISMATCH");
+          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(allowedRepos), permissions: permissions(account) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
           checkPermissions(tokenResponse.permissions, account);
           const repos = await api("/installation/repositories?per_page=100", token);
-          if (!exactRepos(repos)) bad("REPOSITORY_SCOPE_MISMATCH");
+          if (!exactRepos(repos, allowedRepos)) bad("REPOSITORY_SCOPE_MISMATCH");
           if (preflight?.kind === "review") {
             const pr = await api(root + "/pulls/" + preflight.number, token);
             if (pr?.head?.sha !== preflight.sha) bad("STALE_HEAD");
@@ -361,7 +367,7 @@ var require_core = __commonJS({
               if ((current?.sha ?? null) !== preflight.sha) bad("STALE_FILE");
             }
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), ...account.account === "pg" ? { installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })) } : {}, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
           return { ok: true, receipt: { account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {} };
@@ -375,9 +381,9 @@ var require_core = __commonJS({
   }
 });
 
-// github-agent-plugin/node/linux-security.cjs
+// node/linux-security.cjs
 var require_linux_security = __commonJS({
-  "github-agent-plugin/node/linux-security.cjs"(exports2, module2) {
+  "node/linux-security.cjs"(exports2, module2) {
     "use strict";
     var fs = require("node:fs/promises");
     var constants = require("node:fs").constants;
@@ -547,9 +553,9 @@ var require_linux_security = __commonJS({
   }
 });
 
-// github-agent-plugin/node/store.cjs
+// node/store.cjs
 var require_store = __commonJS({
-  "github-agent-plugin/node/store.cjs"(exports2, module2) {
+  "node/store.cjs"(exports2, module2) {
     "use strict";
     var fs = require("node:fs/promises");
     var path = require("node:path");
@@ -841,9 +847,9 @@ var require_store = __commonJS({
   }
 });
 
-// github-agent-plugin/deployment.json
+// deployment.json
 var require_deployment = __commonJS({
-  "github-agent-plugin/deployment.json"(exports2, module2) {
+  "deployment.json"(exports2, module2) {
     module2.exports = {
       accounts: [
         "bb",
@@ -864,7 +870,7 @@ var require_deployment = __commonJS({
   }
 });
 
-// github-agent-plugin/src/review-cli.cjs
+// src/review-cli.cjs
 var { createClient } = require_core();
 var store = require_store();
 var deployment = require_deployment();

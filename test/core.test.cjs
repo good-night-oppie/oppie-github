@@ -21,7 +21,7 @@ function fixture(options={}){
   if(path==='/app'){const slug=options.slug||(account.account==='reviewinbox'?'reviewinboxoppiexyz':'oppie-agent-'+account.account);data={id:options.wrongApp?9:account.app_id,slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/'+slug};}
   else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||perms};
   else if(path.endsWith('/access_tokens'))data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
-  else if(path==='/installation/repositories')data=options.repositories||repos;
+  else if(path==='/installation/repositories')data=options.repositories||(account.account==='pg'?repoSet(counter===1?pgInstalled:pgAllowed):repos);
   else if(path.endsWith('/pulls/7'))data={number:7,head:{sha:options.head||SHA},state:'open',draft:!!options.draft};
   else if(path==='/repos/good-night-oppie/MontClip')data={default_branch:'main'};
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
@@ -138,4 +138,22 @@ test('writes to default branch and stale files refused',async()=>{
 test('failed credential provider does not expose error content',async()=>{
  const client=createClient({credentials:async()=>{throw Error('SECRET');},fetch:async()=>{throw Error('unexpected');}});
  assert.deepEqual(await client.run(input('identity')),{ok:false,errorCode:'CREDENTIAL_UNAVAILABLE',execution:'not_executed'});
+});
+
+const pgAllowed={MontClip:1441621868,'MontClip-Cindy':1446532339,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const pgInstalled={...pgAllowed,'montclip-rsi':1450602468,'rsi-playbooks':1450603260};
+const repoSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
+function pgFixture(extra={}){let reads=0;return fixture({account:'pg',override(path){if(path==='/installation/repositories')return {status:200,data:repoSet(++reads===1?(extra.installed||pgInstalled):(extra.allowed||pgAllowed))};},...extra});}
+test('PG verifies six installed repos but scopes execution token and identity to four authorized repos',async()=>{
+ const f=pgFixture();const r=await f.client.run({account:'pg',repo:'oppie-github',operation:'admin_get',args:{}});assert.equal(r.ok,true);
+ const token=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1);assert.deepEqual(token.parsed.repository_ids.sort(),Object.values(pgAllowed).sort());assert.equal(token.parsed.permissions.administration,'write');
+ const id=await pgFixture().client.run(input('identity',{},'pg'));assert.equal(id.ok,true);assert.equal(id.result.repositories.length,4);assert.equal(id.result.installationRepositories.length,6);
+});
+test('PG denies extra installed repos before credentials; other accounts retain two-repo scope',async()=>{
+ for(const account of ['pg','bb','qq','reviewinbox'])for(const repo of account==='pg'?['montclip-rsi','rsi-playbooks']:['oppie-github','sglang-review-inbox']){
+  const f=fixture({account});const r=await f.client.run({account,repo,operation:'identity',args:{}});assert.equal(r.ok,false);assert.equal(f.credentialsCalls(),0);
+ }
+});
+test('PG fails closed on unexpected installation or execution repository sets',async()=>{
+ for(const config of [{installed:{...pgInstalled,unexpected:123}},{allowed:pgInstalled},{installed:{...pgInstalled,'oppie-github':1}}]){const r=await pgFixture(config).client.run(input('identity',{},'pg'));assert.equal(r.ok,false);}
 });

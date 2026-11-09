@@ -41,3 +41,7 @@ Lovable: https://docs.lovable.dev/integrations/github
 Claude Design Import: https://github.com/apps/claude-design-import
 
 These are design references; no third-party subscription or integration is created by this plugin.
+
+## PG scope update candidate
+
+PG is an explicit second administration-capable alias, limited to its four approved operation repositories (MontClip, MontClip-Cindy, oppie-github, sglang-review-inbox). Installation-only montclip-rsi/rsi-playbooks are not operation targets. All other aliases retain original bounds. See PG-SCOPE.md for IDs, observation-vs-authorization separation and legacy credential-envelope compatibility. This section supersedes earlier QQ-only/two-repository descriptions for PG only.

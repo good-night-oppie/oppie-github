@@ -5,7 +5,7 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过独立 GitHub App 操作 MontClip 两仓的 Issue、PR 和代码；ReviewInbox 用 ReviewInboxOppieXYZ 发表 Agent COMMENT 评审时。",
-  "version": "1.2.1",
+  "version": "1.2.3",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "on-demand",
@@ -73,7 +73,7 @@
     },
     {
       "name": "github",
-      "description": "使用显式App身份操作已授权两个仓库。先用github_operations查询参数；写入须对应用户任务授权。不会回退共享gh登录；未知结果先读回，勿重复写。",
+      "description": "显式App身份操作已授权仓库。PG可用原两仓及明确批准的两个新仓；其他账号保持两仓。先查询参数及identity，未知写结果先读回。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -98,7 +98,9 @@
             "type": "string",
             "enum": [
               "MontClip",
-              "MontClip-Cindy"
+              "MontClip-Cindy",
+              "oppie-github",
+              "sglang-review-inbox"
             ]
           },
           "operation": {
@@ -218,5 +220,5 @@
       }
     ]
   },
-  "releaseNotes": "新增 ReviewInboxOppieXYZ 独立评审身份（COMMENT-only、代码只读）；兼容既有 App 的 OppieXYZ 改名；修复提升权限环境新建凭据文件的所有者。"
+  "releaseNotes": "候选：PG显式四仓操作和管理权限；六仓安装验收与四仓执行token分离，其他账号范围不变。"
 }

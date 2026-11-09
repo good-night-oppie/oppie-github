@@ -2,6 +2,9 @@
 const crypto = require('node:crypto');
 const OWNER = 'good-night-oppie';
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
+const PG_REPOSITORIES=Object.freeze({...REPOSITORIES,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
+const PG_INSTALLATION_REPOSITORIES=Object.freeze({...PG_REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260});
+const executionRepositories=account=>account.account==='pg'?PG_REPOSITORIES:REPOSITORIES;
 const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
 const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['bb',5665927,179806310],['cindy',5665939,179806330],['deja',5665940,179806356],
@@ -10,7 +13,7 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['video',5665949,179806582],['vv',5665951,179806217],['reviewinbox',5687106,180305629],
 ].map(([account,app_id,installation_id])=>[account,Object.freeze({account,app_id,installation_id,
  app_name:APP_NAMES[account],app_slug:APP_NAMES[account].toLowerCase(),app_slug_status:'expected_not_live',
- allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'})])));
+ allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'||account==='pg'})])));
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
 const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','admin_get','admin_update']);
@@ -24,7 +27,7 @@ function positive(x){if(!Number.isSafeInteger(x)||x<1)bad();return x;}
 function sha(x){if(typeof x!=='string'||! /^[a-f0-9]{40}$/i.test(x))bad();return x;}
 function ref(x){nonempty(x,200);if(/[\s~^:?*\[\\%\x00-\x1f]/.test(x)||x.includes('..')||x.includes('@{')||x.includes('//')||x.startsWith('/')||x.endsWith('/')||x.endsWith('.')||x.split('/').some(s=>s.startsWith('.')||s.endsWith('.lock')))bad('INVALID_REF');return x;}
 function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.startsWith('/')||/[\\%?#\x00-\x1f]/.test(x)||x.split('/').some(s=>!s||s==='.'||s==='..'))bad('INVALID_PATH');return x.split('/').map(encodeURIComponent).join('/');}
-function repoName(x){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(REPOSITORIES,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
+function repoName(x,allowed){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 function permissions(a){return {contents:a.account==='reviewinbox'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
 function checkPermissions(actual,a){const expected=permissions(a);if(!obj(actual)||Object.entries(expected).some(([k,v])=>actual[k]!==v)||Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k)))bad('PERMISSION_MISMATCH');}
 function makeJwt(account,pem,now=Date.now()){
@@ -45,7 +48,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now}=
    if(typeof input.account!=='string'||!Object.hasOwn(ACCOUNTS,input.account))bad('ACCOUNT_REQUIRED');
    const account=ACCOUNTS[input.account];const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
-   const repo=repoName(input.repo);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
+   const allowedRepos=executionRepositories(account);const installedRepos=account.account==='pg'?PG_INSTALLATION_REPOSITORIES:allowedRepos;const repo=repoName(input.repo,allowedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
    if(account.account==='reviewinbox'){
     if(['create_branch','update_file'].includes(operation))bad('READ_ONLY_CONTENTS');
     if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
@@ -105,19 +108,19 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now}=
    if(typeof probeResponse?.token!=='string'||!probeResponse.token)bad('INVALID_INSTALLATION_TOKEN');
    secrets.push(probeResponse.token);
    const probe=await api('/installation/repositories?per_page=100',probeResponse.token);
-   function exactRepos(r){return r?.total_count===2&&Array.isArray(r.repositories)&&r.repositories.length===2&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&REPOSITORIES[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===2;}
-   if(!exactRepos(probe))bad('REPOSITORY_SCOPE_MISMATCH');
-   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(REPOSITORIES),permissions:permissions(account)});
+   function exactRepos(r,expected){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
+   if(!exactRepos(probe,installedRepos))bad('REPOSITORY_SCOPE_MISMATCH');
+   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(allowedRepos),permissions:permissions(account)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
    const repos=await api('/installation/repositories?per_page=100',token);
-   if(!exactRepos(repos))bad('REPOSITORY_SCOPE_MISMATCH');
+   if(!exactRepos(repos,allowedRepos))bad('REPOSITORY_SCOPE_MISMATCH');
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
    if(preflight?.kind==='branch'||preflight?.kind==='file'){
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(preflight.kind==='file'){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');}
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),...(account.account==='pg'?{installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name}))}:{}),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
    return {ok:true,receipt:{account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{})};}
   finally{secrets.fill('');}

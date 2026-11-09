@@ -14,6 +14,8 @@ const INSTALL_IDS = { bb:'179806310', cindy:'179806330', deja:'179806356', dd:'1
 const MAX_PEM = 32768;
 const MAX_STORE = 1048576;
 function failure(code) { const e = new Error(code); e.code = code; return e; }
+// Legacy credential-envelope metadata is retained for DPAPI compatibility; it is NOT
+// the current authorization policy. core.cjs verifies live permissions and token scopes.
 function metadata(account) {
   if (typeof account !== 'string' || !Object.hasOwn(APP_IDS, account)) throw failure('UNKNOWN_ACCOUNT');
   return { account, appId:APP_IDS[account], installationId:INSTALL_IDS[account], appSlug:ACCOUNTS[account].app_slug,
