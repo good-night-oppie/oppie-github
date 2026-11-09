@@ -132,7 +132,13 @@ test('Windows directory read/traverse ACL is allowed, file reads and directory w
  t.after(()=>fs.rm(temporary,{recursive:true,force:true}));
  const pemPath=path.join(temporary,'synthetic.pem');await fs.writeFile(pemPath,pem);
  const store=createStore({root:path.join(temporary,'private')});
- await store.importKey({account:'bb',pem_path:pemPath});
+ try { await store.importKey({account:'bb',pem_path:pemPath}); }
+ catch(error) {
+  // Synthetic fixture only: expose ACL diagnostics, never PEM/ciphertext contents.
+  const inspect=await runFile('icacls.exe',[store.paths.root],{windowsHide:true,timeout:15000,maxBuffer:16384}).catch(e=>({stdout:'icacls unavailable',stderr:''}));
+  console.error('Synthetic fixture ACL:',inspect.stdout);
+  throw error;
+ }
  // Builtin Users is a portable synthetic non-owner group. No real store is touched.
  const group='*S-1-5-32-545';
  const acl=(target,...args)=>runFile('icacls.exe',[target,...args],{windowsHide:true,timeout:15000,maxBuffer:16384});
