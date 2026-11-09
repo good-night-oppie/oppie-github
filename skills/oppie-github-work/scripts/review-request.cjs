@@ -721,6 +721,7 @@ var require_store = __commonJS({
       const answer = await powershell(ACL_SCRIPT, { operation: "verify", path: target });
       if (answer !== "ok") throw failure("UNSAFE_STORE_ACL");
     }
+    var RESTRICT_NEW_SCRIPT = "$ErrorActionPreference='Stop'; try { $r=[Console]::In.ReadToEnd() | ConvertFrom-Json; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $directory=[IO.Directory]::Exists($r.path); $a=if($directory){[IO.Directory]::GetAccessControl($r.path)}else{[IO.File]::GetAccessControl($r.path)}; $a.SetAccessRuleProtection($true,$false); foreach($ace in @($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))){ if($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $ace.IdentityReference.Value -ne $sid -and $ace.IdentityReference.Value -ne 'S-1-5-18'){ $a.RemoveAccessRuleAll($ace) } }; if($directory){[IO.Directory]::SetAccessControl($r.path,$a)}else{[IO.File]::SetAccessControl($r.path,$a)}; [Console]::Out.Write('restricted') } catch { exit 1 }";
     async function tightenNew(target, directory) {
       const sid = await powershell(ACL_SCRIPT, { operation: "identity" });
       if (!/^S-1-5-\d+(?:-\d+)+$/.test(sid)) throw failure("SECURE_STORAGE_UNAVAILABLE");
@@ -728,6 +729,7 @@ var require_store = __commonJS({
       try {
         await runFile("icacls.exe", [target, "/setowner", "*" + sid], { windowsHide: true, timeout: 15e3, maxBuffer: 16384 });
         await runFile("icacls.exe", [target, "/inheritance:r", "/grant:r", "*" + sid + ":" + rights, "*S-1-5-18:" + rights], { windowsHide: true, timeout: 15e3, maxBuffer: 16384 });
+        if (await powershell(RESTRICT_NEW_SCRIPT, { path: target }) !== "restricted") throw failure("SECURE_STORAGE_UNAVAILABLE");
       } catch (_) {
         throw failure("SECURE_STORAGE_UNAVAILABLE");
       }
@@ -933,7 +935,7 @@ var require_store = __commonJS({
       return { importKey, load, list, paths: { root, file }, backendName: linux ? linux.backendName : "Windows DPAPI CurrentUser" };
     }
     var defaultStore = createStore();
-    module2.exports = { ...defaultStore, createStore, metadata, APP_IDS, INSTALL_IDS };
+    module2.exports = { ...defaultStore, createStore, metadata, APP_IDS, INSTALL_IDS, tightenNew, verifyWindowsAcl };
   }
 });
 

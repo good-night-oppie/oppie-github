@@ -48,3 +48,13 @@ Merged main c60f0fb (containing accepted PR#4 and managed-preview PR#2) without 
 Conflicts resolved individually in ghost.json, node/core.cjs, node/runtime.cjs, test/core.test.cjs; generated Skill bundle rebuilt with pinned esbuild rather than choosing either side. Manifest stays1.4.0 candidate, retains confirm capability and main's resident lifecycle. Fixtures model each token's actual repository_ids for both QQ and ReviewInbox; both negative suites retained.
 
 Local merged-tree validation:94/94 tests passed, including real isolated Inbox process tests, owner-confirmation/nonce tests and Windows ACL test. npm ci, check:bundle and git diff --check passed. Actual private submodule checked out at unchanged7cb961a4. No new live GitHub writes or installed-Host acceptance was run. New merged head requires owner/Rea final review; old approvals do not transfer.
+
+## Consolidated CI follow-up
+
+Owner closed PR#1/#3 and directed subsequent plugin work to this PR#5. Included the CLI child-env NODE_DEBUG isolation, checkout submodules:true, setup-python3.12 and OPPIE_TEST_PYTHON resolved from sys.executable. Private submodule checkout needs CI-only INBOX_SOURCE_READ_TOKEN with read access to this repository and sglang-review-inbox; no local App keys are copied to Actions. Missing access is a failure, not skipped coverage.
+
+Windows negative reproduction showed newly created objects may carry explicit broad Administrators/Users ACEs, which /inheritance:r does not remove. tightenNew now removes non-owner/non-SYSTEM Allow ACEs on ONLY its newly-created object, then applies the unchanged strict verification. Existing stores remain verify-only and reject unsafe ACLs; no global ACL or actual account store was modified by these tests. New synthetic directory/file regression failed before the fix and passes after. The helper export exists for isolated native tests, not as a plugin tool.
+
+The resident-lifecycle regression from the prior branch is retained: boot without config does not load keys and every GitHub operation loads credentials freshly. A resident Node process remains to own the child lease; absent config starts no Python/network loop. No absolute idle RSS claim is made and JS string memory erasure is not guaranteed.
+
+Draft override remains excluded from this branch; no future Draft feature is implicitly approved. PG operation policy remains unchanged here; the separate per-account matrix will build on this branch with no PG admin operations. ReviewInbox still verifies installation6/execution2, Video/VV execution2. This follow-up is not installation authority.

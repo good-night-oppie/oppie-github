@@ -148,3 +148,13 @@ test('Windows directory read/traverse ACL is allowed, file reads and directory w
  await assert.rejects(store.list(),/UNSAFE_STORE_ACL/);
  await assert.rejects(store.load('bb'),/UNSAFE_STORE_ACL/);
 });
+
+test('new Windows objects discard explicit broad grants without weakening existing-store rejection',{skip:process.platform!=='win32'},async t=>{
+ const {tightenNew,verifyWindowsAcl}=require('../node/store.cjs');
+ const root=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'oppie-explicit-acl-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ for(const directory of [true,false]){
+  const target=path.join(root,directory?'fresh-directory':'fresh-file');if(directory)await fs.mkdir(target);else await fs.writeFile(target,'synthetic');
+  await runFile('icacls.exe',[target,'/grant:r','*S-1-5-32-544:'+(directory?'(OI)(CI)F':'F'),'*S-1-5-32-545:'+(directory?'(OI)(CI)M':'M')],{windowsHide:true,timeout:15000});
+  await tightenNew(target,directory);await verifyWindowsAcl(target);
+ }
+});

@@ -52,6 +52,7 @@ async function verifyWindowsAcl(target) {
   const answer=await powershell(ACL_SCRIPT,{operation:'verify',path:target});
   if(answer!=='ok')throw failure('UNSAFE_STORE_ACL');
 }
+const RESTRICT_NEW_SCRIPT = "$ErrorActionPreference='Stop'; try { $r=[Console]::In.ReadToEnd() | ConvertFrom-Json; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $directory=[IO.Directory]::Exists($r.path); $a=if($directory){[IO.Directory]::GetAccessControl($r.path)}else{[IO.File]::GetAccessControl($r.path)}; $a.SetAccessRuleProtection($true,$false); foreach($ace in @($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))){ if($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $ace.IdentityReference.Value -ne $sid -and $ace.IdentityReference.Value -ne 'S-1-5-18'){ $a.RemoveAccessRuleAll($ace) } }; if($directory){[IO.Directory]::SetAccessControl($r.path,$a)}else{[IO.File]::SetAccessControl($r.path,$a)}; [Console]::Out.Write('restricted') } catch { exit 1 }";
 async function tightenNew(target, directory) {
   const sid=await powershell(ACL_SCRIPT,{operation:'identity'});
   if(!/^S-1-5-\d+(?:-\d+)+$/.test(sid))throw failure('SECURE_STORAGE_UNAVAILABLE');
@@ -61,6 +62,8 @@ async function tightenNew(target, directory) {
     // Set ownership only for our new object; existing stores are verified, never repaired silently.
     await runFile('icacls.exe',[target,'/setowner','*'+sid],{windowsHide:true,timeout:15000,maxBuffer:16384});
     await runFile('icacls.exe',[target,'/inheritance:r','/grant:r','*'+sid+':'+rights,'*S-1-5-18:'+rights],{windowsHide:true,timeout:15000,maxBuffer:16384});
+    // /inheritance:r does not remove explicit ACEs on new Windows runner objects.
+    if(await powershell(RESTRICT_NEW_SCRIPT,{path:target})!=='restricted')throw failure('SECURE_STORAGE_UNAVAILABLE');
   }
   catch(_){throw failure('SECURE_STORAGE_UNAVAILABLE');}
   await verifyWindowsAcl(target);
@@ -194,4 +197,4 @@ function createStore(options={}) {
   return {importKey,load,list,paths:{root,file},backendName:linux?linux.backendName:'Windows DPAPI CurrentUser'};
 }
 const defaultStore=createStore();
-module.exports={...defaultStore,createStore,metadata,APP_IDS,INSTALL_IDS};
+module.exports={...defaultStore,createStore,metadata,APP_IDS,INSTALL_IDS,tightenNew,verifyWindowsAcl};
