@@ -1,6 +1,6 @@
 # 伙伴 GitHub plugin
 
-Source snapshot of local oppie-github 1.2.1 for QQ review. This repository is private. It contains implementation, manual, bundled Skill adapter and tests; no credentials or packaged .cindy binaries.
+Source snapshot of local oppie-github 1.2.1 for QQ review. The owner has made this repository and its Inbox submodule repository public; CI can fetch the pinned submodule without a separate cross-repository secret. It contains implementation, manual, bundled Skill adapter and tests; no credentials or packaged .cindy binaries.
 
 ## Validation
 

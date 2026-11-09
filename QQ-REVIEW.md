@@ -58,3 +58,6 @@ Windows negative reproduction showed newly created objects may carry explicit br
 The resident-lifecycle regression from the prior branch is retained: boot without config does not load keys and every GitHub operation loads credentials freshly. A resident Node process remains to own the child lease; absent config starts no Python/network loop. No absolute idle RSS claim is made and JS string memory erasure is not guaranteed.
 
 Draft override remains excluded from this branch; no future Draft feature is implicitly approved. PG operation policy remains unchanged here; the separate per-account matrix will build on this branch with no PG admin operations. ReviewInbox still verifies installation6/execution2, Video/VV execution2. This follow-up is not installation authority.
+
+
+Owner visibility decision confirmed by live GitHub metadata: both oppie-github and sglang-review-inbox are now public. The previously missing private-submodule CI credential is no longer required; workflow uses normal checkout with submodules:true and no custom token secret. No visibility mutation was performed by this source task.
