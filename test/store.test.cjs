@@ -13,7 +13,7 @@ const {createStore,metadata,APP_IDS}=require('../node/store.cjs');
 // Synthetic test-only key. It is never uploaded or associated with a GitHub App.
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 async function fixture(t,overrides={}){
-  const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'oppie-store-test-'));
+  const temporary=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'oppie-store-test-'));
   t.after(()=>fs.rm(temporary,{recursive:true,force:true}));
   const pemPath=path.join(temporary,'synthetic.pem');await fs.writeFile(pemPath,pem);
   const key=crypto.randomBytes(32);
@@ -128,7 +128,7 @@ test('PEM symlinks are rejected',async t=>{
  await assert.rejects(store.importKey({account:'bb',pem_path:link}),/KEY_IMPORT_FAILED/);
 });
 test('Windows directory read/traverse ACL is allowed, file reads and directory writes are refused', {skip:process.platform!=='win32'}, async t=>{
- const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'oppie-real-acl-test-'));
+ const temporary=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'oppie-real-acl-test-'));
  t.after(()=>fs.rm(temporary,{recursive:true,force:true}));
  const pemPath=path.join(temporary,'synthetic.pem');await fs.writeFile(pemPath,pem);
  const store=createStore({root:path.join(temporary,'private')});
