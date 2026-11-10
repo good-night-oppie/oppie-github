@@ -2,11 +2,11 @@
 
 ## Six-repository configuration candidate
 
-This candidate enables six-repository installation and execution scopes for bb, cindy, deja, dd, gg, jj, rea and pg. QQ remains six/six; ReviewInbox remains six/two; video and vv remain two/two. Existing operation roles are unchanged. PG's installed administration permission is checked separately and is never requested on its execution token. Each request validates and freezes one scope snapshot before accessing credentials; identity and successful receipts now include the scope revision.
+This candidate enables six-repository installation and execution scopes for bb, cindy, deja, dd, gg, jj, rea, pg, video and vv. QQ remains six/six; ReviewInbox remains six/two. Existing operation roles are unchanged. PG's installation may contain additional owner-granted permissions, provided the four ordinary required permissions are sufficient. Its execution token still requests and validates only contents/write, issues/write, pull_requests/write and metadata/read; additional installation grants never enable administrative operations. Each request validates and freezes one scope snapshot before accessing credentials; identity and successful receipts now include the scope revision.
 
 **Settings writes and the hot-configuration UI are not implemented in this increment.** No caller-provided configuration, approval flag or `/kv` value can change the running policy. The internal provider seam is tested with synthetic configurations only. See [the security decision and remaining host contract](docs/adr/0001-repository-scope-settings.md). This preview is not deployment approval.
 
-The earlier diagnostics section below describes PR #7; this candidate additionally rejects malformed repository rows safely and changes the eight authorized accounts' expected sets as documented above.
+The earlier diagnostics section below describes PR #7; this candidate additionally rejects malformed repository rows safely and changes the ten authorized accounts' expected sets as documented above.
 
 Source snapshot of local oppie-github 1.2.1 for QQ review. The owner has made this repository and its Inbox submodule repository public; CI can fetch the pinned submodule without a separate cross-repository secret. It contains implementation, manual, bundled Skill adapter and tests; no credentials or packaged .cindy binaries.
 
