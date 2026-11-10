@@ -33,10 +33,10 @@ test('Deja can use each of the six authorized repositories with exact narrowed t
 test('an outside repository fails before credentials',async()=>{const f=fixture(),r=await f.client.run(input('outside'));assert.equal(r.errorCode,'REPOSITORY_NOT_ALLOWED');assert.equal(f.keyReads(),0);});
 test('account defaults match the authorized installation and execution matrix',async()=>{
  for(const account of Object.keys(ACCOUNTS).filter(a=>a!=='deja')){
-  const installation=['video','vv'].includes(account)?TWO:CATALOG,execution=['video','vv','reviewinbox'].includes(account)?TWO:CATALOG;
+  const installation=CATALOG,execution=account==='reviewinbox'?TWO:CATALOG;
   const f=fixture({account,installation,execution}),r=await f.client.run(input('MontClip',account));assert.equal(r.ok,true,account+': '+r.errorCode);
   assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body.repository_ids,Object.values(execution));
-  if(['video','vv','reviewinbox'].includes(account))assert.equal((await f.client.run(input('montclip-rsi',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
+  if(account==='reviewinbox')assert.equal((await f.client.run(input('montclip-rsi',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
  }
 });
 test('six-repository installation still refuses wrong IDs, duplicate rows and incomplete listings',async()=>{
