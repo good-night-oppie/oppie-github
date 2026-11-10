@@ -74,7 +74,7 @@ var require_repository_policy = __commonJS({
       return Object.freeze(selected);
     }
     function baseline(account) {
-      return { installation: ["video", "vv"].includes(account) ? TWO : CATALOG, execution: ["video", "vv", "reviewinbox"].includes(account) ? TWO : CATALOG };
+      return { installation: CATALOG, execution: account === "reviewinbox" ? TWO : CATALOG };
     }
     function sameMap(a, b) {
       return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
@@ -198,9 +198,11 @@ var require_core = __commonJS({
       return { contents: ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
     function checkPermissions(actual, a, phase = "execution") {
-      const expected = { ...permissions(a), ...phase === "installation" && a.account === "pg" ? { administration: "write" } : {} };
-      const rank = { none: 0, read: 1, write: 2 };
-      if (!obj(actual) || Object.entries(expected).some(([k, v]) => a.account === "qq" ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || a.account !== "qq" && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
+      const expected = permissions(a), rank = { none: 0, read: 1, write: 2 };
+      const pgInstallation = phase === "installation" && a.account === "pg";
+      const allowSuperset = a.account === "qq" || pgInstallation;
+      if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
+      if (!obj(actual) || Object.entries(expected).some(([k, v]) => allowSuperset ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || !allowSuperset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
     }
     function makeJwt(account, pem, now = Date.now()) {
       const h = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
