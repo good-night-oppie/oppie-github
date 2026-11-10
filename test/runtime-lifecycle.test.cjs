@@ -10,6 +10,7 @@ test('resident worker boot without Inbox config does not load keys; every GitHub
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
   if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>{starts++;return {ok:false,errorCode:'CONFIG_REQUIRED'};},stop:async()=>({ok:true})})};
   if(name==='../deployment.json')return {accounts:['bb']};
+  if(name==='./repository-policy.cjs')return require('../node/repository-policy.cjs');
   if(name==='./operations.cjs')return {};
   return require(name);
  }});

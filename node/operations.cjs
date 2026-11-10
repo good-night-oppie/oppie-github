@@ -1,6 +1,6 @@
 'use strict';
 module.exports={
- identity:'{}; verifies App, installation, permissions and exactly two repositories',
+ identity:'{}; verifies App, permissions and exact per-account installation/execution repository names and IDs',
  get_contents:'{path?:string,ref?:branchOrSha}; bounded repository file/directory read',
  list_branches:'{page?:integer,per_page?:1..100}',
  list_issues:'{state?:open|closed|all,page?:integer,per_page?:1..100}',
