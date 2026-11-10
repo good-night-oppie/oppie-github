@@ -30,7 +30,15 @@ function ref(x){nonempty(x,200);if(/[\s~^:?*\[\\%\x00-\x1f]/.test(x)||x.includes
 function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.startsWith('/')||/[\\%?#\x00-\x1f]/.test(x)||x.split('/').some(s=>!s||s==='.'||s==='..'))bad('INVALID_PATH');return x.split('/').map(encodeURIComponent).join('/');}
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 function permissions(a){return {contents:['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
-function checkPermissions(actual,a,phase='execution'){const expected={...permissions(a),...(phase==='installation'&&a.account==='pg'?{administration:'write'}:{})};const rank={none:0,read:1,write:2};if(!obj(actual)||Object.entries(expected).some(([k,v])=>a.account==='qq'?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(a.account!=='qq'&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');}
+function checkPermissions(actual,a,phase='execution'){
+ const expected=permissions(a),rank={none:0,read:1,write:2};
+ // PG may have additional owner-granted installation permissions. Never request
+ // or accept them on its ordinary execution token; QQ's existing rules stay unchanged.
+ const pgInstallation=phase==='installation'&&a.account==='pg';
+ const allowSuperset=a.account==='qq'||pgInstallation;
+ if(pgInstallation&&(!obj(actual)||Object.keys(expected).some(k=>typeof actual[k]!=='string'||!Object.hasOwn(rank,actual[k]))))bad('PERMISSION_MISMATCH');
+ if(!obj(actual)||Object.entries(expected).some(([k,v])=>allowSuperset?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(!allowSuperset&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');
+}
 function makeJwt(account,pem,now=Date.now()){
  const h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url');
  const t=Math.floor(now/1000);const p=Buffer.from(JSON.stringify({iat:t-60,exp:t+480,iss:String(account.app_id)})).toString('base64url');
