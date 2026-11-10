@@ -43,6 +43,65 @@ var require_owner_authorization = __commonJS({
   }
 });
 
+// node/repository-policy.cjs
+var require_repository_policy = __commonJS({
+  "node/repository-policy.cjs"(exports2, module2) {
+    "use strict";
+    var CATALOG = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
+    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
+    var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
+    function invalid() {
+      const e = new Error("INVALID_SCOPE_CONFIGURATION");
+      e.code = "INVALID_SCOPE_CONFIGURATION";
+      throw e;
+    }
+    function record(value, keys) {
+      if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
+      const own = Reflect.ownKeys(value);
+      if (own.length !== keys.length || own.some((k) => typeof k !== "string" || !keys.includes(k) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k), "value"))) invalid();
+    }
+    function repoMap(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+      const names = Object.keys(value);
+      if (!names.length || names.length > 6) invalid();
+      record(value, names);
+      const selected = {};
+      for (const name of Object.keys(CATALOG)) if (Object.hasOwn(value, name)) {
+        if (value[name] !== CATALOG[name]) invalid();
+        selected[name] = CATALOG[name];
+      }
+      if (Object.keys(selected).length !== names.length) invalid();
+      return Object.freeze(selected);
+    }
+    function baseline(account) {
+      return { installation: ["video", "vv"].includes(account) ? TWO : CATALOG, execution: ["video", "vv", "reviewinbox"].includes(account) ? TWO : CATALOG };
+    }
+    function sameMap(a, b) {
+      return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
+    }
+    function validatePolicy(value) {
+      record(value, ["schemaVersion", "revision", "accounts"]);
+      if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) invalid();
+      record(value.accounts, ACCOUNT_NAMES);
+      const accounts = {};
+      for (const account of ACCOUNT_NAMES) {
+        const source = value.accounts[account];
+        record(source, ["installation", "execution"]);
+        const installation = repoMap(source.installation), execution = repoMap(source.execution);
+        if (!Object.keys(execution).every((k) => installation[k] === execution[k])) invalid();
+        const original = baseline(account);
+        if (account !== "deja" && (!sameMap(installation, original.installation) || !sameMap(execution, original.execution))) invalid();
+        accounts[account] = Object.freeze({ installation, execution });
+      }
+      return Object.freeze({ schemaVersion: 1, revision: value.revision, accounts: Object.freeze(accounts) });
+    }
+    function initialPolicy() {
+      return validatePolicy({ schemaVersion: 1, revision: 0, accounts: Object.fromEntries(ACCOUNT_NAMES.map((a) => [a, baseline(a)])) });
+    }
+    module2.exports = { CATALOG, ACCOUNT_NAMES, initialPolicy, validatePolicy };
+  }
+});
+
 // node/core.cjs
 var require_core = __commonJS({
   "node/core.cjs"(exports2, module2) {
@@ -50,11 +109,10 @@ var require_core = __commonJS({
     var crypto = require("node:crypto");
     var { validateProof } = require_owner_authorization();
     var OWNER = "good-night-oppie";
+    var { initialPolicy, validatePolicy } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var QQ_REPOSITORIES = Object.freeze({ ...REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
-    var REVIEW_INBOX_INSTALLATION = Object.freeze({ ...REPOSITORIES, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
@@ -139,8 +197,8 @@ var require_core = __commonJS({
     function permissions(a) {
       return { contents: ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
-    function checkPermissions(actual, a) {
-      const expected = permissions(a);
+    function checkPermissions(actual, a, phase = "execution") {
+      const expected = { ...permissions(a), ...phase === "installation" && a.account === "pg" ? { administration: "write" } : {} };
       const rank = { none: 0, read: 1, write: 2 };
       if (!obj(actual) || Object.entries(expected).some(([k, v]) => a.account === "qq" ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || a.account !== "qq" && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
     }
@@ -175,14 +233,14 @@ var require_core = __commonJS({
       if (obj(value)) return Object.fromEntries(Object.entries(value).filter(([k]) => !["token", "access_token", "private_key", "authorization"].includes(k.toLowerCase())).map(([k, v]) => [k, clean(v, secrets)]));
       return value;
     }
-    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false } = {}) {
+    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
         let secrets = [], scopeDiagnostics;
         try {
           let exactRepos = function(r, expected = expectedRepos) {
             const count = Object.keys(expected).length;
-            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
+            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => obj(x) && x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
           }, scopeMismatch = function(code, observed, expected) {
             const list = Array.isArray(observed?.repositories) ? observed.repositories : [];
             const names = list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n));
@@ -200,7 +258,14 @@ var require_core = __commonJS({
           if (!OPERATION_NAMES.includes(operation)) bad("UNKNOWN_OPERATION");
           if (account.account === "qq" && !QQ_ALLOWED.includes(operation)) bad("QQ_AUTHORING_REFUSED");
           if (QQ_ONLY.includes(operation) && account.account !== "qq") bad("QQ_ACCOUNT_REQUIRED");
-          const expectedRepos = account.account === "qq" ? QQ_REPOSITORIES : REPOSITORIES;
+          let policy;
+          try {
+            policy = validatePolicy(repositoryPolicy());
+          } catch (_) {
+            bad("INVALID_SCOPE_CONFIGURATION");
+          }
+          const scope = policy.accounts[account.account];
+          const expectedRepos = scope.execution;
           const repo = repoName(input2.repo, expectedRepos);
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
@@ -422,12 +487,12 @@ var require_core = __commonJS({
           if (Number(app?.id) !== account.app_id || !allowedAppSlug(account.account, app?.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
           const installation = await api("/app/installations/" + account.installation_id, jwt);
           if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || installation?.repository_selection !== "selected" || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
-          checkPermissions(installation.permissions, account);
+          checkPermissions(installation.permissions, account, "installation");
           const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
-          if (!exactRepos(probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos)) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos);
+          if (!exactRepos(probe, scope.installation)) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
           const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
@@ -465,9 +530,9 @@ var require_core = __commonJS({
               if ((current?.sha ?? null) !== preflight.sha) bad("STALE_FILE");
             }
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), ...account.account === "reviewinbox" ? { installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })) } : {}, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
           if (operation === "enqueue_pull" && (result?.errors || !result?.data?.enqueuePullRequest?.mergeQueueEntry?.id)) throw new CoreError("QUEUE_RESULT_UNCONFIRMED", "unknown");
-          return { ok: true, receipt: { account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
+          return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
         } finally {

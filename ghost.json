@@ -4,8 +4,8 @@
   "id": "oppie-github",
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
-  "whenToUse": "伙伴通过独立 GitHub App 操作 MontClip 两仓的 Issue、PR 和代码；ReviewInbox 用 ReviewInboxOppieXYZ 发表 Agent COMMENT 评审时。",
-  "version": "1.4.0",
+  "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 仅作 COMMENT 评审。",
+  "version": "1.5.0-preview.2",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
@@ -72,7 +72,7 @@
     },
     {
       "name": "github",
-      "description": "使用显式App身份操作已授权两个仓库。先用github_operations查询参数；写入须对应用户任务授权。不会回退共享gh登录；未知结果先读回，勿重复写。",
+      "description": "使用显式App身份操作该账号已授权仓库。先用github_operations查询参数；写入须对应用户任务授权。不会回退共享gh登录；未知结果先读回，勿重复写。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -237,11 +237,11 @@
     "items": [
       {
         "name": "oppie-github-work",
-        "description": "Use the selected Oppie teammate GitHub App for MontClip code, issues, pull requests and reviews.",
+        "description": "Use a teammate's own Oppie GitHub App on its configured repositories; inspect identity and diagnose repository scope mismatches before performing GitHub work.",
         "dir": "skills/oppie-github-work"
       }
     ]
   },
-  "releaseNotes": "候选：保留受管只读 Inbox 和 ReviewInbox 六仓安装/两仓执行；新增 QQ 六仓审查白名单及逐次主人授权，未安装。",
+  "releaseNotes": "候选：八个伙伴账号支持六仓安装与执行；PG 安装管理权限与普通执行令牌分离。保留 QQ、ReviewInbox、Video、VV 的范围和操作边界；热配置界面留待后续。",
   "confirm": true
 }

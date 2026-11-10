@@ -2,11 +2,10 @@
 const crypto = require('node:crypto');
 const {validateProof}=require('./owner-authorization.cjs');
 const OWNER = 'good-night-oppie';
+const {initialPolicy,validatePolicy}=require('./repository-policy.cjs');
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
-const QQ_REPOSITORIES=Object.freeze({...REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
-const REVIEW_INBOX_INSTALLATION=Object.freeze({...REPOSITORIES,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
 const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
 const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['bb',5665927,179806310],['cindy',5665939,179806330],['deja',5665940,179806356],
@@ -31,7 +30,7 @@ function ref(x){nonempty(x,200);if(/[\s~^:?*\[\\%\x00-\x1f]/.test(x)||x.includes
 function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.startsWith('/')||/[\\%?#\x00-\x1f]/.test(x)||x.split('/').some(s=>!s||s==='.'||s==='..'))bad('INVALID_PATH');return x.split('/').map(encodeURIComponent).join('/');}
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 function permissions(a){return {contents:['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
-function checkPermissions(actual,a){const expected=permissions(a);const rank={none:0,read:1,write:2};if(!obj(actual)||Object.entries(expected).some(([k,v])=>a.account==='qq'?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(a.account!=='qq'&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');}
+function checkPermissions(actual,a,phase='execution'){const expected={...permissions(a),...(phase==='installation'&&a.account==='pg'?{administration:'write'}:{})};const rank={none:0,read:1,write:2};if(!obj(actual)||Object.entries(expected).some(([k,v])=>a.account==='qq'?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(a.account!=='qq'&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');}
 function makeJwt(account,pem,now=Date.now()){
  const h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url');
  const t=Math.floor(now/1000);const p=Buffer.from(JSON.stringify({iat:t-60,exp:t+480,iss:String(account.app_id)})).toString('base64url');
@@ -41,7 +40,7 @@ function makeJwt(account,pem,now=Date.now()){
 function listQuery(a,extra=[]){exact(a,['page','per_page',...extra]);const q=new URLSearchParams({page:String(a.page===undefined?1:positive(a.page)),per_page:String(a.per_page===undefined?30:positive(a.per_page))});if(Number(q.get('per_page'))>100)bad();return q;}
 function labels(value){if(!Array.isArray(value)||value.length>30)bad();return value.map(x=>nonempty(x,100));}
 function clean(value,secrets){if(typeof value==='string'){for(const secret of secrets)if(secret)value=value.split(secret).join('[REDACTED]');return value;}if(Array.isArray(value))return value.map(x=>clean(x,secrets));if(obj(value))return Object.fromEntries(Object.entries(value).filter(([k])=>!['token','access_token','private_key','authorization'].includes(k.toLowerCase())).map(([k,v])=>[k,clean(v,secrets)]));return value;}
-function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false}={}){
+function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
   let secrets=[],scopeDiagnostics;
@@ -51,7 +50,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const account=ACCOUNTS[input.account];const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
-   const expectedRepos=account.account==='qq'?QQ_REPOSITORIES:REPOSITORIES;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
+   let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
    if(account.account==='reviewinbox'){
     if(['create_branch','update_file'].includes(operation))bad('READ_ONLY_CONTENTS');
     if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
@@ -115,14 +115,15 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(Number(app?.id)!==account.app_id||!allowedAppSlug(account.account,app?.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
    const installation=await api('/app/installations/'+account.installation_id,jwt);
    if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||installation?.repository_selection!=='selected'||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
-   checkPermissions(installation.permissions,account);
+   // PG's installed App has administration permission; ordinary execution never requests it.
+   checkPermissions(installation.permissions,account,'installation');
    // An unscoped metadata-only probe verifies the INSTALLATION's repository set.
    // A narrowed execution token alone would hide unexpected extra installations.
    const probeResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
    if(typeof probeResponse?.token!=='string'||!probeResponse.token)bad('INVALID_INSTALLATION_TOKEN');
    secrets.push(probeResponse.token);
    const probe=await api('/installation/repositories?per_page=100',probeResponse.token);
-   function exactRepos(r,expected=expectedRepos){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
+   function exactRepos(r,expected=expectedRepos){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>obj(x)&&x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
    function scopeMismatch(code,observed,expected){
     // Diagnostics never include raw API objects, IDs or credentials. A partial
     // or malformed list must not be mistaken for a verified empty installation.
@@ -132,7 +133,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      actualRepositoriesComplete:Array.isArray(observed?.repositories)&&names.length===list.length&&observed.total_count===list.length};
     bad(code);
    }
-   if(!exactRepos(probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos))scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos);
+   if(!exactRepos(probe,scope.installation))scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,scope.installation);
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
@@ -151,9 +152,9 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(preflight.kind==='file'){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');}
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),...(account.account==='reviewinbox'?{installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name}))}:{}),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
    if(operation==='enqueue_pull'&&(result?.errors||!result?.data?.enqueuePullRequest?.mergeQueueEntry?.id))throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown');
-   return {ok:true,receipt:{account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
+   return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
