@@ -20,7 +20,7 @@ function repoMap(value){
  if(Object.keys(selected).length!==names.length)invalid();
  return Object.freeze(selected);
 }
-function baseline(account){return {installation:['video','vv'].includes(account)?TWO:CATALOG,execution:['video','vv','reviewinbox'].includes(account)?TWO:CATALOG};}
+function baseline(account){return {installation:CATALOG,execution:account==='reviewinbox'?TWO:CATALOG};}
 function sameMap(a,b){return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>a[k]===b[k]);}
 function validatePolicy(value){
  record(value,['schemaVersion','revision','accounts']);

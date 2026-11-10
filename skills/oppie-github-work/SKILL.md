@@ -11,7 +11,7 @@ Select the account alias matching the acting teammate. The account parameter is 
 
 ## Repository configuration
 
-In the six-repository release, bb/cindy/deja/dd/gg/jj/rea/pg use all six catalog repositories for installation and execution. QQ keeps six/six and its existing operation restrictions; ReviewInbox keeps six/two with read-only contents and COMMENT-only reviews; video/vv keep two/two. PG installation administration permission does not permit management operations: execution tokens omit it. Confirm the installed version with identity before relying on these defaults.
+In the six-repository release, bb/cindy/deja/dd/gg/jj/rea/pg/video/vv use all six catalog repositories for installation and execution. QQ keeps six/six and its existing operation restrictions; ReviewInbox keeps six/two with read-only contents and COMMENT-only reviews. PG may have additional installation permissions, but ordinary execution tokens still contain only contents/write, issues/write, pull_requests/write and metadata/read. Installation grants do not permit management operations through this plugin. Confirm the installed version with identity before relying on these defaults.
 
 The settings-write UI is deferred. This release uses reviewed code configuration; there is no supported hot-save tool or page.
 

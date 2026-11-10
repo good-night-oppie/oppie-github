@@ -18,7 +18,7 @@ Read the relevant files at a known ref, create a feature branch, use expected SH
 
 For reviews, get PR head SHA and all changed-file pages, read sufficient surrounding code, then submit_review with that exact commit_id. STALE_HEAD requires fresh analysis. A timeout or WRITE_OUTCOME_UNKNOWN requires remote readback before any repeat. Do not approve your own work. No automatic merge is implemented.
 
-PG has administration:write on the installed App, but its execution tokens omit administration and all admin/QQ-only operations remain denied. This installation permission is not a grant to perform management operations.
+PG installation permissions may be a superset of the four ordinary required permissions. Its execution tokens remain limited to contents/write, issues/write, pull_requests/write and metadata/read; additional grants and admin/QQ-only operations remain denied at execution. An installation permission is not a grant to perform management operations through this plugin.
 
 QQ has Administration write on GitHub, but the plugin exposes only a bounded merge-settings update. This permission does not authorize unrelated changes. Default branches, workflow modifications and secret administration are not automatic review actions.
 
