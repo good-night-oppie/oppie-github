@@ -36,6 +36,53 @@ function fixture(options={}){
  return {calls,client:createClient({credentials:async alias=>{credentialsCalls++;assert.equal(alias,account.account);return PEM;},fetch,now:()=>NOW,authorize:options.authorize,claimAuthorization:options.claimAuthorization|| (async()=>true)}),credentialsCalls:()=>credentialsCalls};
 }
 const input=(operation,args={},account='bb')=>({account,repo:'MontClip',operation,args});
+
+for(const stage of ['installation','execution']){
+ for(const variant of ['extra','missing','wrong-id','duplicate','count']){
+  test(`${stage} scope diagnostic: ${variant} remains blocked before business execution`,async()=>{
+   const actual=structuredClone(repos);
+   if(variant==='extra')actual.repositories.push({id:99,name:'other',full_name:'good-night-oppie/other'});
+   if(variant==='missing')actual.repositories.pop();
+   if(variant==='wrong-id')actual.repositories[0].id=99;
+   if(variant==='duplicate')actual.repositories[1]=actual.repositories[0];
+   actual.total_count=variant==='count'?99:actual.repositories.length;
+   let reads=0;
+   const f=fixture({override:(path)=>{
+    if(path==='/installation/repositories'&&++reads===(stage==='installation'?1:2))return {status:200,data:actual};
+   }});
+   const r=await f.client.run(input('get_issue',{number:3}));
+   assert.equal(r.errorCode,stage==='installation'?'INSTALLATION_REPOSITORY_SCOPE_MISMATCH':'EXECUTION_REPOSITORY_SCOPE_MISMATCH');
+   assert.equal(r.execution,'not_executed');
+   assert.deepEqual(r.diagnostics.expectedRepositories,repos.repositories.map(x=>x.full_name));
+   assert.deepEqual(r.diagnostics.actualRepositories,actual.repositories.map(x=>x.full_name));
+   assert.equal(f.calls.filter(c=>c.path.endsWith('/access_tokens')).length,stage==='installation'?1:2);
+   assert.equal(f.calls.some(c=>c.path.startsWith('/repos/')),false);
+   assert.ok(!JSON.stringify(r).includes('secret-token'));
+   assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
+  });
+ }
+}
+test('scope diagnostics omit malformed names and extra response fields, and redact known secrets',async()=>{
+ const f=fixture({repositories:{total_count:4,repositories:[
+  {full_name:'good-night-oppie/secret-token-1',token:'secret-token-1',private_key:PEM},
+  {full_name:'bad\nname/repo'}, {full_name:PEM}, null
+ ]}});
+ const r=await f.client.run(input('identity'));
+ assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH');
+ assert.deepEqual(r.diagnostics.actualRepositories,['good-night-oppie/[REDACTED]']);
+ assert.equal(r.diagnostics.actualRepositoriesComplete,false);
+ assert.deepEqual(Object.keys(r.diagnostics).sort(),['actualRepositories','actualRepositoriesComplete','expectedRepositories']);
+ assert.ok(!JSON.stringify(r).includes('secret-token'));
+ assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
+});
+test('scope diagnostics distinguish absent list from a verified empty list',async()=>{
+ for(const value of [{total_count:0},{total_count:0,repositories:[]}]){
+  const f=fixture({repositories:value}),r=await f.client.run(input('identity'));
+  assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH');
+  assert.deepEqual(r.diagnostics.actualRepositories,[]);
+  assert.equal(r.diagnostics.actualRepositoriesComplete,Array.isArray(value.repositories));
+ }
+});
 test('JWT is RSA signed, short lived, and names fixed app id',()=>{
  const jwt=makeJwt(ACCOUNTS.bb,PEM,NOW);const [h,p,s]=jwt.split('.');
  const payload=JSON.parse(Buffer.from(p,'base64url'));assert.equal(payload.iss,String(ACCOUNTS.bb.app_id));assert.equal(payload.exp-payload.iat,540);
@@ -110,7 +157,7 @@ test('ReviewInbox does not accept invented legacy slug or elevated installation 
  }
 });
 test('extra permissions, extra repositories and duplicate repos fail closed',async()=>{
- for(const option of [{permissions:{...expected,administration:'write'}},{repositories:{...repos,total_count:3}},{repositories:{total_count:2,repositories:[repos.repositories[0],repos.repositories[0]]}}]){const f=fixture(option);const r=await f.client.run(input('identity'));assert.equal(r.ok,false);assert.ok(['PERMISSION_MISMATCH','REPOSITORY_SCOPE_MISMATCH'].includes(r.errorCode));}
+ for(const option of [{permissions:{...expected,administration:'write'}},{repositories:{...repos,total_count:3}},{repositories:{total_count:2,repositories:[repos.repositories[0],repos.repositories[0]]}}]){const f=fixture(option);const r=await f.client.run(input('identity'));assert.equal(r.ok,false);assert.ok(['PERMISSION_MISMATCH','INSTALLATION_REPOSITORY_SCOPE_MISMATCH'].includes(r.errorCode));}
 });
 test('ordinary account cannot request admin; QQ uses ruleset-only administration',async()=>{
  const f=fixture();assert.equal((await f.client.run(input('admin_get'))).errorCode,'ADMIN_ACCOUNT_REQUIRED');assert.equal(f.calls.length,0);

@@ -44,7 +44,7 @@ function clean(value,secrets){if(typeof value==='string'){for(const secret of se
 function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
-  let secrets=[];
+  let secrets=[],scopeDiagnostics;
   try{
    exact(input,['account','repo','operation','args']);
    if(typeof input.account!=='string'||!Object.hasOwn(ACCOUNTS,input.account))bad('ACCOUNT_REQUIRED');
@@ -123,12 +123,21 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    secrets.push(probeResponse.token);
    const probe=await api('/installation/repositories?per_page=100',probeResponse.token);
    function exactRepos(r,expected=expectedRepos){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
-   if(!exactRepos(probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos))bad('REPOSITORY_SCOPE_MISMATCH');
+   function scopeMismatch(code,observed,expected){
+    // Diagnostics never include raw API objects, IDs or credentials. A partial
+    // or malformed list must not be mistaken for a verified empty installation.
+    const list=Array.isArray(observed?.repositories)?observed.repositories:[];
+    const names=list.slice(0,100).map(r=>r?.full_name).filter(n=>typeof n==='string'&&/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n));
+    scopeDiagnostics={expectedRepositories:Object.keys(expected).map(n=>OWNER+'/'+n),actualRepositories:names,
+     actualRepositoriesComplete:Array.isArray(observed?.repositories)&&names.length===list.length&&observed.total_count===list.length};
+    bad(code);
+   }
+   if(!exactRepos(probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos))scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,account.account==='reviewinbox'?REVIEW_INBOX_INSTALLATION:expectedRepos);
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
    const repos=await api('/installation/repositories?per_page=100',token);
-   if(!exactRepos(repos))bad('REPOSITORY_SCOPE_MISMATCH');
+   if(!exactRepos(repos))scopeMismatch('EXECUTION_REPOSITORY_SCOPE_MISMATCH',repos,expectedRepos);
    if(preflight?.kind==='owner_reference'){
     const match=preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
     if(!match||!Object.hasOwn(expectedRepos,match[1])||![repo,'MontClip'].includes(match[1]))bad('OWNER_REFERENCE_SCOPE');
@@ -145,7 +154,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),...(account.account==='reviewinbox'?{installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name}))}:{}),expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
    if(operation==='enqueue_pull'&&(result?.errors||!result?.data?.enqueuePullRequest?.mergeQueueEntry?.id))throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown');
    return {ok:true,receipt:{account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
-  }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{})};}
+  }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
  return {run};
