@@ -5,7 +5,7 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 仅作 COMMENT 评审。",
-  "version": "1.5.0-preview.2",
+  "version": "1.5.0-preview.3",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
@@ -242,6 +242,6 @@
       }
     ]
   },
-  "releaseNotes": "候选：八个伙伴账号支持六仓安装与执行；PG 安装管理权限与普通执行令牌分离。保留 QQ、ReviewInbox、Video、VV 的范围和操作边界；热配置界面留待后续。",
+  "releaseNotes": "候选：Video 和 VV 对齐标准六仓；PG 兼容安装时额外授予的权限，普通执行令牌仍限四项。QQ 与 ReviewInbox 的范围和操作限制不变；热配置界面留待后续。",
   "confirm": true
 }
