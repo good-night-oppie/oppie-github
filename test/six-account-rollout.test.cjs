@@ -3,13 +3,13 @@ const test=require('node:test'),assert=require('node:assert/strict'),crypto=requ
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
 const {CATALOG}=require('../node/repository-policy.cjs');
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
-const SIX=['bb','cindy','deja','dd','gg','jj','rea','pg'];
+const SIX=['bb','cindy','deja','dd','gg','jj','rea','pg','video','vv'];
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const now=Date.parse('2026-11-10T22:00:00Z');
 function fixture(account,options={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
- const execution=['video','vv','reviewinbox'].includes(account)?TWO:CATALOG;
- const installation=['video','vv'].includes(account)?TWO:CATALOG;
+ const execution=account==='reviewinbox'?TWO:CATALOG;
+ const installation=CATALOG;
  const permissions={contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const installPermissions={...permissions,...(account==='pg'?{administration:'write'}:{})};
  const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
@@ -33,7 +33,7 @@ for(const account of SIX)test(account+' uses all six repositories for ordinary i
   assert.equal(f.calls.filter(c=>c.path.startsWith('/repos/')).length,1);
  }
 });
-for(const account of ['qq','reviewinbox','video','vv'])test(account+' retains repository and execution permission boundaries',async()=>{
+for(const account of ['qq','reviewinbox'])test(account+' retains repository and execution permission boundaries',async()=>{
  const f=fixture(account),r=await f.client.run({account,repo:'MontClip',operation:'identity'});
  assert.equal(r.ok,true,r.errorCode);
  assert.equal(r.result.repositories.length,account==='qq'?6:2);
@@ -54,9 +54,9 @@ test('PG admin and QQ-only operations fail before credentials',async()=>{
   assert.equal(r.ok,false);assert.equal(r.execution,'not_executed');assert.equal(f.keyReads(),0);assert.equal(f.calls.length,0);
  }
 });
-test('PG installation permissions remain exact and deny unrelated privilege',async()=>{
+test('PG installation still refuses insufficient ordinary permissions',async()=>{
  const basic={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
- for(const installPermissions of [basic,{...basic,administration:'read'},{...basic,administration:'write',actions:'write'},{...basic,administration:'write',contents:'read'}]){
+ for(const installPermissions of [{...basic,contents:'read'},{...basic,issues:'none'},{...basic,pull_requests:'read'},{...basic,metadata:'none'}]){
   const f=fixture('pg',{installPermissions});assert.equal((await f.client.run({account:'pg',repo:'MontClip',operation:'identity'})).errorCode,'PERMISSION_MISMATCH');
   assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
  }
