@@ -25,7 +25,7 @@ function fixture(options={}){
   else if(path.endsWith('/access_tokens')){
    data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
    const requested=JSON.parse(init.body).repository_ids;
-   const installed=['video','vv'].includes(account.account)?twoRepos:repos;
+   const installed=repos;
    const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
    tokenRepositories.set('Bearer '+data.token,{total_count:selected.length,repositories:selected});
   }
