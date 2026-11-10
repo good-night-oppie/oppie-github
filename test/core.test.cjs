@@ -7,7 +7,9 @@ const {privateKey,publicKey}=crypto.generateKeyPairSync('rsa',{modulusLength:204
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
 const expected={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
-const repos={total_count:2,repositories:Object.entries(REPOSITORIES).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const {CATALOG}=require('../node/repository-policy.cjs');
+const repos={total_count:6,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const twoRepos={total_count:2,repositories:repos.repositories.filter(r=>Object.hasOwn(REPOSITORIES,r.name))};
 const SHA='a'.repeat(40);
 function fixture(options={}){
  const calls=[];const tokenRepositories=new Map();let credentialsCalls=0;let counter=0;
@@ -19,11 +21,11 @@ function fixture(options={}){
   let data,status=200;
   if(options.override){const out=await options.override(path,init,calls);if(out){if(out.throw)throw Error('secret-token '+PEM);return {ok:out.status>=200&&out.status<300,status:out.status,text:async()=>JSON.stringify(out.data)};}}
   if(path==='/app'){const slug=options.slug||(account.account==='reviewinbox'?'reviewinboxoppiexyz':'oppie-agent-'+account.account);data={id:options.wrongApp?9:account.app_id,slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/'+slug};}
-  else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||perms};
+  else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||{...perms,...(account.account==='pg'?{administration:'write'}:{})}};
   else if(path.endsWith('/access_tokens')){
    data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
    const requested=JSON.parse(init.body).repository_ids;
-   const installed=account.account==='reviewinbox'?riSet(riInstall):account.account==='qq'?qqRepoSet:repos;
+   const installed=['video','vv'].includes(account.account)?twoRepos:repos;
    const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
    tokenRepositories.set('Bearer '+data.token,{total_count:selected.length,repositories:selected});
   }
@@ -90,11 +92,11 @@ test('JWT is RSA signed, short lived, and names fixed app id',()=>{
 });
 test('identity verifies app, installation and exact repos; credentials never returned',async()=>{
  const f=fixture();const r=await f.client.run(input('identity'));
- assert.equal(r.ok,true);assert.equal(r.receipt.app_slug,'oppie-agent-bb');assert.equal(r.result.repositories.length,2);
+ assert.equal(r.ok,true);assert.equal(r.receipt.app_slug,'oppie-agent-bb');assert.equal(r.result.repositories.length,6);
  assert.ok(!JSON.stringify(r).includes('secret-token'));assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
  const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens'));
  assert.deepEqual(grants[0].parsed,{permissions:{metadata:'read'}});
- assert.deepEqual(grants[1].parsed.repository_ids,[1441621868,1446532339]);assert.deepEqual(grants[1].parsed.permissions,expected);
+ assert.deepEqual(grants[1].parsed.repository_ids,Object.values(CATALOG));assert.deepEqual(grants[1].parsed.permissions,expected);
 });
 test('account mandatory and unknown account, repository escapes, operation rejected before key read',async()=>{
  const f=fixture();for(const value of [ {...input('identity'),account:undefined},{...input('identity'),account:'EdwardTang'},{...input('identity'),repo:'other/MontClip'},{...input('identity'),operation:'raw_request'},input('get_contents',{path:'../secret'}),input('get_contents',{path:'a%2fb'}),input('create_branch',{branch:'bad..ref',sha:SHA}),input('identity',{url:'https://evil.test'})]){
@@ -205,7 +207,7 @@ test('QQ ruleset mutation needs live trusted confirmation and a structured owner
  const bad=fixture({account:'qq',authorize:async()=>true});assert.equal((await bad.client.run(input('ruleset_update',{...args,nonce:'a'.repeat(32),owner_authorization:'approved'},'qq'))).ok,false);assert.equal(bad.credentialsCalls(),0);
 });
 test('QQ unexpected repos and insufficient permission fail closed',async()=>{
- for(const options of [{repositories:repos},{repositories:{...qqRepoSet,repositories:[...qqRepoSet.repositories.slice(1),qqRepoSet.repositories[1]]}},{permissions:{...expected,pull_requests:'read',administration:'write'}}])assert.equal((await fixture({account:'qq',...options}).client.run(input('identity',{},'qq'))).ok,false);
+ for(const options of [{repositories:twoRepos},{repositories:{...qqRepoSet,repositories:[...qqRepoSet.repositories.slice(1),qqRepoSet.repositories[1]]}},{permissions:{...expected,pull_requests:'read',administration:'write'}}])assert.equal((await fixture({account:'qq',...options}).client.run(input('identity',{},'qq'))).ok,false);
 });
 test('QQ dismissal is bounded to a review and enqueue binds current head',async()=>{
  const f=fixture({account:'qq'});assert.equal((await f.client.run(input('dismiss_review',{number:7,review_id:4,message:'Owner requested dismissal'},'qq'))).ok,true);assert.ok(f.calls.at(-1).path.endsWith('/pulls/7/reviews/4/dismissals'));
@@ -220,13 +222,13 @@ test('ruleset update rejects an expired owner comment before PUT',async()=>{cons
 test('consumed owner nonce cannot produce a second ruleset write',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,claimAuthorization:async()=>false,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{login:'EdwardTang',id:3278807,type:'User'},created_at:new Date(NOW-1000).toISOString(),body:require('../node/owner-authorization.cjs').requiredLine('MontClip',args)}};}});const r=await f.client.run(input('ruleset_update',args,'qq'));assert.equal(r.errorCode,'OWNER_AUTHORIZATION_REPLAYED');assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
 const riInstall={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
 const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
-function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||repos)};}});}
+function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||twoRepos)};}});}
 test('ReviewInbox validates six installation repos while minting original two-repo execution token',async()=>{
  const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,6);assert.equal(r.result.repositories.length,2);
  const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(REPOSITORIES).sort());assert.deepEqual(request.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
 });
 test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail closed',async()=>{
  const full=riSet(riInstall);
- for(const extra of [{install:repos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:full}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
+ for(const extra of [{install:twoRepos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:full}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
  for(const repo of ['montclip-rsi','rsi-playbooks','oppie-github','sglang-review-inbox']){const f=riFixture();assert.equal((await f.client.run({account:'reviewinbox',repo,operation:'identity',args:{}})).ok,false);assert.equal(f.credentialsCalls(),0);}
 });

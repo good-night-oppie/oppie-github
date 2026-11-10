@@ -1,10 +1,40 @@
 ---
 name: oppie-github-work
-description: Use the selected Oppie teammate GitHub App for MontClip code, issues, pull requests and reviews.
+description: Use a teammate's own Oppie GitHub App on its configured repositories; inspect identity and diagnose repository scope mismatches before performing GitHub work.
 ---
 
-When acting as a named Oppie teammate on good-night-oppie/MontClip or MontClip-Cindy, discover `ghost_info({ghost_id:"oppie-github",namespace:"local"})`. Read `ghost_manual({ghost_id:"oppie-github",namespace:"local",path:"agent-github"})` for the workflow. Select the matching explicit account alias from the actual task identity or user's request; this selection is not host-attested isolation. If the acting teammate is unknown, ask rather than choose QQ or EdwardTang.
+# Oppie GitHub work
 
-Call github_operations for operation arguments and github_accounts for key presence. Use the plugin's github tool with account/repo/operation/args. Verify identity before the first write. Keep the response receipt's App slug, installation ID, repository and object URL attached to work evidence. Never request/export a private key or token through conversation, and do not fall back to shared gh login when the App is unavailable.
+Discover `ghost_info({ghost_id:"oppie-github",namespace:"local"})` and read `ghost_manual({ghost_id:"oppie-github",namespace:"local",path:"agent-github"})`. Use the live tool schemas; do not assume a settings page or configuration-reading operation exists in the installed version.
 
-Follow the user's scope and the repository's instructions. A selected account or available permission is not authorization for arbitrary writes. For automated PR reviews use the queue claim/finish protocol and COMMENT only. Review Inbox author notifications must use verified task ownership, not a guessed mapping from GitHub bot names; refer to BB's agreed routing rules when available.
+Select the account alias matching the acting teammate. The account parameter is a selection, not proof of caller identity or authorization. If the identity is unknown, clarify it; do not choose another teammate's account to make an operation succeed. Use `github_operations` to discover operation arguments and `github_accounts` to inspect account readiness without exposing credentials.
+
+## Repository configuration
+
+In the six-repository release, bb/cindy/deja/dd/gg/jj/rea/pg use all six catalog repositories for installation and execution. QQ keeps six/six and its existing operation restrictions; ReviewInbox keeps six/two with read-only contents and COMMENT-only reviews; video/vv keep two/two. PG installation administration permission does not permit management operations: execution tokens omit it. Confirm the installed version with identity before relying on these defaults.
+
+The settings-write UI is deferred. This release uses reviewed code configuration; there is no supported hot-save tool or page.
+
+Use the current account configuration, when exposed by the installed plugin, rather than a hard-coded two-repository list. Distinguish:
+
+- Installation repositories: the exact set expected on the GitHub App installation.
+- Execution repositories: the repositories this account may target through the plugin.
+- Operation permissions: the account's existing role restrictions, which are not changed by adding a repository.
+
+The repository catalog is not a grant of access to every account. Never copy a discovered installation list into the allowed configuration automatically. Configuration changes require an explicit user request covering the affected account and repository scope. Do not write configuration through private files or undocumented endpoints.
+
+When the installed version supports configuration readback, record the effective account, repository sets and revision. After an authorized save, read back the effective configuration and make a fresh read-only identity call. Do not report that a saved setting has taken effect solely because the page displayed success. If the required interface is absent, report the installed version and missing capability; do not invent a tool or use another identity.
+
+## Identity and execution
+
+Before the first write, call the plugin's `github` tool with the selected account, target repository and `operation:"identity"`. Require the inner result to succeed. An outer `ok:true` only confirms that the plugin call completed. `execution:"not_executed"` means the requested GitHub operation did not run.
+
+Retain the receipt's App slug, installation ID, repository, object URL and configuration revision when available. Check the target and operation against the user's request and the account's role. Available GitHub permissions do not override teammate restrictions on commenting, reviewing, approving or merging.
+
+## Scope failures
+
+For `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`, compare expected and actual installation repositories in the diagnostic receipt. For `EXECUTION_REPOSITORY_SCOPE_MISMATCH`, compare the execution token's repositories with the expected execution scope. For the older `REPOSITORY_SCOPE_MISMATCH`, report that the failure stage is unknown unless other evidence identifies it. Preserve any completeness indicator: a partial list cannot establish the full difference.
+
+Report repository names and the difference, never tokens or private keys. Do not weaken exact-set checks, change App installation settings, retry a write, or switch to a shared login merely to clear the error. After an authorized correction, verify identity again before resuming the original operation. Check for an existing result before retrying any write whose outcome is unknown.
+
+For automatic review work, follow the installed manual's queue claim/finish protocol and COMMENT-only restrictions. Resolve author notifications from verified current task ownership; never guess a partner from a bot login or signature.
