@@ -178,11 +178,20 @@ var require_core = __commonJS({
     function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
-        let secrets = [];
+        let secrets = [], scopeDiagnostics;
         try {
           let exactRepos = function(r, expected = expectedRepos) {
             const count = Object.keys(expected).length;
             return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
+          }, scopeMismatch = function(code, observed, expected) {
+            const list = Array.isArray(observed?.repositories) ? observed.repositories : [];
+            const names = list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n));
+            scopeDiagnostics = {
+              expectedRepositories: Object.keys(expected).map((n) => OWNER + "/" + n),
+              actualRepositories: names,
+              actualRepositoriesComplete: Array.isArray(observed?.repositories) && names.length === list.length && observed.total_count === list.length
+            };
+            bad(code);
           };
           exact(input2, ["account", "repo", "operation", "args"]);
           if (typeof input2.account !== "string" || !Object.hasOwn(ACCOUNTS, input2.account)) bad("ACCOUNT_REQUIRED");
@@ -418,14 +427,14 @@ var require_core = __commonJS({
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
-          if (!exactRepos(probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos)) bad("REPOSITORY_SCOPE_MISMATCH");
+          if (!exactRepos(probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos)) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, account.account === "reviewinbox" ? REVIEW_INBOX_INSTALLATION : expectedRepos);
           const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
           checkPermissions(tokenResponse.permissions, account);
           const repos = await api("/installation/repositories?per_page=100", token);
-          if (!exactRepos(repos)) bad("REPOSITORY_SCOPE_MISMATCH");
+          if (!exactRepos(repos)) scopeMismatch("EXECUTION_REPOSITORY_SCOPE_MISMATCH", repos, expectedRepos);
           if (preflight?.kind === "owner_reference") {
             const match = preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
             if (!match || !Object.hasOwn(expectedRepos, match[1]) || ![repo, "MontClip"].includes(match[1])) bad("OWNER_REFERENCE_SCOPE");
@@ -460,7 +469,7 @@ var require_core = __commonJS({
           if (operation === "enqueue_pull" && (result?.errors || !result?.data?.enqueuePullRequest?.mergeQueueEntry?.id)) throw new CoreError("QUEUE_RESULT_UNCONFIRMED", "unknown");
           return { ok: true, receipt: { account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
-          return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {} };
+          return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
         } finally {
           secrets.fill("");
         }
