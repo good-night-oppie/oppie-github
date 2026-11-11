@@ -7,7 +7,8 @@ test('actual worker dispatcher refuses injected scope/owner flags and unpublishe
  let handler,loads=0;const output=[];
  const fakeProcess=new EventEmitter();fakeProcess.stdin=new EventEmitter();fakeProcess.stdout={write:s=>output.push(JSON.parse(s))};fakeProcess.exit=()=>{};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../node/runtime.cjs'),'utf8'),{__dirname:path.join(__dirname,'../node'),process:fakeProcess,Buffer,console,require:name=>{
-  if(name==='node:readline')return {createInterface:()=>({on:(_,fn)=>{handler=fn;}})};
+  if(name==='./rpc-input.cjs')return {createReceiver:options=>{const r=require('../node/rpc-input.cjs').createReceiver(options);handler=line=>r.push(Buffer.from(line+'\n'));return r;}};
+  if(name==='./file-upload.cjs')return require('../node/file-upload.cjs');
   if(name==='./store.cjs')return {paths:{root:'synthetic-store'},load:async()=>{loads++;throw Error('Credentials must not be read');}};
   if(name==='./core.cjs')return require('../node/core.cjs');
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
