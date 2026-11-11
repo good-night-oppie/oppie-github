@@ -53,3 +53,30 @@ The plugin fetches the GitHub baseline on that branch, verifies its SHA and deco
 The serialized operation object (including account, repo, operation and args) must be <=261120 UTF-8 bytes; 1024 bytes are reserved below the host's 262144-byte request limit. Count JSON bytes, not JavaScript string characters. The same budget applies to update_file, including base64 expansion and metadata. A new file whose complete request does not fit is unsupported in this release. No local path upload, cross-request fragments, resume cache, permission expansion or automatic write retries are provided.
 
 REQUEST_TOO_LARGE and PATCH_CONFLICT mean no GitHub write occurred. A changed baseline fails without overwriting it. If the execution status is unknown, read back the exact branch/path before deciding whether to retry. An outer tool ok:true is not write success: inspect the inner ok/errorCode/execution fields. Error messages never forward raw host diagnostics.
+
+## Commit identity for bot accounts
+
+GitHub links a commit to an account by the **author email** stored in the commit, not by who pushed it. A bare `<handle>@users.noreply.github.com` binds the commit to whoever owns that handle as a person (`bb@users.noreply.github.com` once bound a real stranger), and a `[bot]` address with the wrong numeric prefix stays unattributed and trips `unattributed_changes` rules. The GitHub **App ID is not the bot user ID**.
+
+Every teammate commits as its own bot. Set both `user.name` and `user.email` in the clone before the first commit:
+
+| Bot | `user.name` | `user.email` |
+| --- | --- | --- |
+| BB | `bboppiexyz[bot]` | `354007710+bboppiexyz[bot]@users.noreply.github.com` |
+| Cindy | `cindyoppiexyz[bot]` | `354008066+cindyoppiexyz[bot]@users.noreply.github.com` |
+| Deja | `dejaoppiexyz[bot]` | `354008095+dejaoppiexyz[bot]@users.noreply.github.com` |
+| DD | `ddoppiexyz[bot]` | `354008109+ddoppiexyz[bot]@users.noreply.github.com` |
+| GG | `ggoppiexyz[bot]` | `354008129+ggoppiexyz[bot]@users.noreply.github.com` |
+| JJ | `jjoppiexyz[bot]` | `354008172+jjoppiexyz[bot]@users.noreply.github.com` |
+| PG | `pgoppiexyz[bot]` | `354008194+pgoppiexyz[bot]@users.noreply.github.com` |
+| QQ | `qqoppiexyz[bot]` | `354008211+qqoppiexyz[bot]@users.noreply.github.com` |
+| Rea | `reaoppiexyz[bot]` | `354008275+reaoppiexyz[bot]@users.noreply.github.com` |
+| Video | `videooppiexyz[bot]` | `354008299+videooppiexyz[bot]@users.noreply.github.com` |
+| VV | `vvoppiexyz[bot]` | `354008317+vvoppiexyz[bot]@users.noreply.github.com` |
+| ReviewInbox | `reviewinboxoppiexyz[bot]` | `354633415+reviewinboxoppiexyz[bot]@users.noreply.github.com` |
+
+Rules:
+
+- Never commit with a bare handle address or with a personal account address from a bot task.
+- After pushing, read the commit back (`gh api repos/<owner>/<repo>/pulls/<n>/commits --jq ".[].author.login"`); `null` means the identity did not resolve and must be fixed before review.
+- `MontClip` `.github/scripts/ci-check.js` enforces this on recent commits: bare handles, unknown `[bot]` ids and `@localhost` / `.local` addresses fail `Syntax & sanity`.
