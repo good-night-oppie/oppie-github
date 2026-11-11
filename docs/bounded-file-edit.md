@@ -14,4 +14,8 @@ REQUEST_TOO_LARGE and PATCH_CONFLICT mean no GitHub write occurred. A changed ba
 
 Unit and VM tests use synthetic GitHub responses, including a 260876-byte baseline. They do not prove installed-plugin transport or a real repository write. Candidate installation and controlled end-to-end acceptance follow independent review. The earlier upload-staging candidate is superseded and must not be installed.
 
-Host INVALID_REQUEST is reported as not_executed. Other transport failures conservatively remain unknown unless non-dispatch is independently guaranteed; cancellation or timeout must not authorize a blind retry.
+Host INVALID_REQUEST, PROCESS_START_FAILED and RATE_LIMITED are reported as not_executed. Read-only calls cannot perform a repository write; a transport failure on those calls also reports not_executed, not a successful read. Other transport failures on writes conservatively remain unknown; cancellation or timeout must not authorize a blind retry.
+
+The worker independently limits params to 261120 bytes and the complete JSON-RPC line to 327680 bytes. The separate line limit leaves room for the host envelope and injected metadata without increasing the operation budget. Non-object params (including arrays) are rejected before dispatch with the original request ID. Runtime pre-execution argument/confirmation rejections retain a fixed error code and not_executed; later uncertain outcomes are not reclassified as safe to retry.
+
+Prepare candidate packages from tracked source files, including tracked files from the pinned vendor submodule. Run tests with PYTHONDONTWRITEBYTECODE=1 and inspect the resulting package: it must contain no .pyc or __pycache__ entries. An older package with the same version string is not interchangeable: bind review and acceptance to the new package hash.
