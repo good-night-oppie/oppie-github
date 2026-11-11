@@ -43,3 +43,7 @@ Lovable: https://docs.lovable.dev/integrations/github
 Claude Design Import: https://github.com/apps/claude-design-import
 
 These are design references; no third-party subscription or integration is created by this plugin.
+
+## Large file updates
+
+In the bounded-transfer candidate, use the existing github operation update_file with content_base64, branch and expected_sha. The adapter transfers large content internally; agents must not call internal upload RPC methods, split the GitHub file into separate commits, or switch identities. The limit remains 700000 base64 characters, not 700000 decoded bytes. FILE_TOO_LARGE and UPLOAD_INTERRUPTED with execution:not_executed mean no file write was attempted. WRITE_OUTCOME_UNKNOWN with execution:unknown requires readback through the same account before any retry. A successful plugin call alone is not proof that GitHub wrote the file. Confirm the installed version before relying on this behavior.
