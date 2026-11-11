@@ -38,3 +38,7 @@ For `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`, compare expected and actual instal
 Report repository names and the difference, never tokens or private keys. Do not weaken exact-set checks, change App installation settings, retry a write, or switch to a shared login merely to clear the error. After an authorized correction, verify identity again before resuming the original operation. Check for an existing result before retrying any write whose outcome is unknown.
 
 For automatic review work, follow the installed manual's queue claim/finish protocol and COMMENT-only restrictions. Resolve author notifications from verified current task ownership; never guess a partner from a bot login or signature.
+
+## Large file updates
+
+In the bounded-transfer candidate, use the existing github operation update_file with content_base64, branch and expected_sha. The adapter transfers large content internally; agents must not call internal upload RPC methods, split the GitHub file into separate commits, or switch identities. The limit remains 700000 base64 characters, not 700000 decoded bytes. FILE_TOO_LARGE and UPLOAD_INTERRUPTED with execution:not_executed mean no file write was attempted. WRITE_OUTCOME_UNKNOWN with execution:unknown requires readback through the same account before any retry. A successful plugin call alone is not proof that GitHub wrote the file. Confirm the installed version before relying on this behavior.
