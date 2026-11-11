@@ -1,7 +1,10 @@
 'use strict';
+const MAX_OPERATION_BYTES=261120; // 1 KiB reserved for the native RPC envelope.
+const safeFailure=(code,execution)=>({ok:false,errorCode:code,execution,message:'GitHub 操作未完成；请查看错误码。写入结果未知时，先读回确认再决定是否重试。'});
 cindy.onHostMessage(async function(message) {
   if (message.type !== 'tool-call') return;
   const methods = {github_accounts:'accounts',github_import_key:'import',github:'run',github_operations:'operations',github_review_queue:'review',github_author_cue_plan:'author_cue',inbox_service:'inbox_service'};
+  let sent=false;
   try {
     if (!Object.prototype.hasOwnProperty.call(methods,message.tool)) throw Error('UNKNOWN_TOOL');
     let method=methods[message.tool],params=message.args||{};
@@ -14,10 +17,17 @@ cindy.onHostMessage(async function(message) {
       if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
       method='run_confirmed';params={input:params,confirmation:message.callId};
     }
+    if(new TextEncoder().encode(JSON.stringify(params)).length>MAX_OPERATION_BYTES){await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure('REQUEST_TOO_LARGE','not_executed')});return;}
+    sent=true;
     const response = await cindy.node.request({method,params,callId:message.callId,cancelWithCall:true,timeoutMs:120000});
-    if (!response.ok) throw Error('WORKER_UNAVAILABLE');
+    if(!response.ok){
+      const code=typeof response.errorCode==='string'&&/^[A-Z_]{1,64}$/.test(response.errorCode)?response.errorCode:'WORKER_UNAVAILABLE';
+      await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure(code,code==='INVALID_REQUEST'?'not_executed':'unknown')});return;
+    }
     await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:response.result});
-  } catch (_) {
-    await cindy.send({type:'tool-result',callId:message.callId,ok:false,message:'GitHub 插件请求未完成。请检查插件连接状态；写操作先核对 GitHub 结果，不要直接重试。'});
+  } catch (error) {
+    const before=['UNKNOWN_TOOL','OWNER_AUTHORIZATION_REQUIRED','CONFIRMATION_TOO_LARGE','OWNER_CONFIRMATION_REQUIRED'];
+    const code=!sent&&before.includes(error?.message)?error.message:'WORKER_UNAVAILABLE';
+    await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure(code,sent?'unknown':'not_executed')});
   }
 });
