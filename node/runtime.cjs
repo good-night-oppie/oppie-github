@@ -1,5 +1,4 @@
 'use strict';
-const readline=require('node:readline');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const crypto=require('node:crypto');
@@ -62,8 +61,5 @@ async function dispatch(method,args){
  throw Error('UNKNOWN_METHOD');
 }
 function reply(message){process.stdout.write(JSON.stringify(message)+'\n');}
-readline.createInterface({input:process.stdin}).on('line',async line=>{
- let r;try{if(line.length>262144)throw Error();r=JSON.parse(line);if(!r||typeof r!=='object'||Array.isArray(r)||!['string','number'].includes(typeof r.id)||typeof r.method!=='string')throw Error();}catch(_){reply({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Invalid request'}});return;}
- try{const result=await dispatch(r.method,r.params||{});reply({jsonrpc:'2.0',id:r.id,result});}
- catch(e){const code=typeof e.code==='string'&&/^[A-Z_]+$/.test(e.code)?e.code:'REQUEST_FAILED';reply({jsonrpc:'2.0',id:r.id,result:{ok:false,errorCode:code,message:'操作未完成；检查凭据与连接状态。未自动重试。'}});}
-});
+const receiver=require('./rpc-input.cjs').createReceiver({dispatch,reply});
+process.stdin.on('data',chunk=>{void receiver.push(chunk);});
