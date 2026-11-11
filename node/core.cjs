@@ -1,7 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const {validateProof}=require('./owner-authorization.cjs');
-const {validateEdits,applyEdits}=require('./file-edit.cjs');
+const {validateEdits,applyEdits,MAX_FILE_BYTES}=require('./file-edit.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
 const OWNER = 'good-night-oppie';
 const {initialPolicy,validatePolicy}=require('./repository-policy.cjs');
@@ -116,14 +116,14 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'admin_get':exact(args,[]);if(!account.admin)bad('ADMIN_ACCOUNT_REQUIRED');route=root;break;
     case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!account.admin)bad('ADMIN_ACCOUNT_REQUIRED');if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();method='PATCH';route=root;body={...args};break;
    }
-   async function api(path,token,method='GET',payload){
+   async function api(path,token,method='GET',payload,maxResponseBytes=2500000){
     if(!path.startsWith('/')||path.startsWith('//')||/[\r\n\\]/.test(path))bad('INVALID_API_ROUTE');
     let response;
     try{response=await fetcher('https://api.github.com'+path,{method,headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'oppie-github-agent-plugin',Authorization:'Bearer '+token,...(payload?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(30000),...(payload?{body:JSON.stringify(payload)}:{})});}
     catch(_){throw new CoreError(method==='GET'?'NETWORK_ERROR':'WRITE_OUTCOME_UNKNOWN',method==='GET'?'not_executed':'unknown');}
     if(response.status>=300&&response.status<400)throw new CoreError('REDIRECT_REFUSED',method==='GET'?'not_executed':'unknown',response.status);
     if(!response.ok)throw new CoreError('GITHUB_HTTP_'+response.status,method!=='GET'&&response.status>=500?'unknown':'not_executed',response.status);
-    let data;try{const text=await response.text();if(Buffer.byteLength(text)>2500000)throw Error();data=text?JSON.parse(text):null;}catch(_){throw new CoreError('INVALID_API_RESPONSE',method==='GET'?'not_executed':'unknown');}return data;
+    let data;try{const text=await response.text();if(Buffer.byteLength(text)>maxResponseBytes)throw Error();data=text?JSON.parse(text):null;}catch(_){throw new CoreError('INVALID_API_RESPONSE',method==='GET'?'not_executed':'unknown');}return data;
    }
    let pem;try{pem=await credentials(account.account);}catch(_){bad('CREDENTIAL_UNAVAILABLE');}if(typeof pem!=='string')bad('CREDENTIAL_UNAVAILABLE');
    secrets.push(pem);const jwt=makeJwt(account,pem,now());secrets.push(jwt);pem=null;
@@ -168,7 +168,18 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
    if(preflight?.kind==='branch'||preflight?.kind==='file'||preflight?.kind==='edit'){
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
-    if(['file','edit'].includes(preflight.kind)){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');if(preflight.kind==='edit')body.content=applyEdits(current,preflight.editArgs,bad);}
+    if(['file','edit'].includes(preflight.kind)){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');if(preflight.kind==='edit'){
+      // Reject stale/oversized metadata before spending a blob request.
+      if(current.type!=='file'||!Number.isSafeInteger(current.size)||current.size<0)bad('INVALID_FILE_BASELINE');
+      if(current.size>MAX_FILE_BYTES)bad('FILE_TOO_LARGE');
+      if(current.encoding==='none'&&current.content===''&&current.size>0){
+       // Only this bounded internal read gets the larger response allowance.
+       const blob=await api(root+'/git/blobs/'+preflight.sha,token,'GET',undefined,3200000);
+       if(blob?.sha!==preflight.sha||blob.size!==current.size||blob.encoding!=='base64'||typeof blob.content!=='string')bad('INVALID_FILE_BASELINE');
+       current={...current,encoding:blob.encoding,content:blob.content};
+      }
+      body.content=applyEdits(current,preflight.editArgs,bad);
+     }}
    }
    const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
    if(operation==='enqueue_pull'&&(result?.errors||!result?.data?.enqueuePullRequest?.mergeQueueEntry?.id))throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown');
