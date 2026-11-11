@@ -1,5 +1,4 @@
 'use strict';
-const readline=require('node:readline');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const crypto=require('node:crypto');
@@ -16,7 +15,9 @@ void inboxService.start();
 const shutdown=()=>inboxService.stop().finally(()=>process.exit(0));
 process.stdin.on('end',shutdown);process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 const queue=createQueue({client,statePath:path.join(store.paths.root,'review-state.json')});
+const uploads=require('./file-upload.cjs').createUploads({run:input=>client.run(input),accounts:deployment.accounts});
 async function dispatch(method,args){
+ if(['upload_begin','upload_chunk','upload_finish','upload_abort'].includes(method))return uploads.handle(method,args);
  if(method==='run_confirmed'){
   const {input,confirmation}=args;
   if(!deployment.accounts.includes('qq')||input?.account!=='qq'||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)throw Error('OWNER_CONFIRMATION_REQUIRED');
@@ -62,8 +63,5 @@ async function dispatch(method,args){
  throw Error('UNKNOWN_METHOD');
 }
 function reply(message){process.stdout.write(JSON.stringify(message)+'\n');}
-readline.createInterface({input:process.stdin}).on('line',async line=>{
- let r;try{if(line.length>262144)throw Error();r=JSON.parse(line);if(!r||typeof r!=='object'||Array.isArray(r)||!['string','number'].includes(typeof r.id)||typeof r.method!=='string')throw Error();}catch(_){reply({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Invalid request'}});return;}
- try{const result=await dispatch(r.method,r.params||{});reply({jsonrpc:'2.0',id:r.id,result});}
- catch(e){const code=typeof e.code==='string'&&/^[A-Z_]+$/.test(e.code)?e.code:'REQUEST_FAILED';reply({jsonrpc:'2.0',id:r.id,result:{ok:false,errorCode:code,message:'操作未完成；检查凭据与连接状态。未自动重试。'}});}
-});
+const receiver=require('./rpc-input.cjs').createReceiver({dispatch,reply});
+process.stdin.on('data',chunk=>{void receiver.push(chunk);});
