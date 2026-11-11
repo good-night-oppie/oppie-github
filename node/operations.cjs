@@ -17,7 +17,7 @@ module.exports={
  submit_review:'{number:integer,commit_id:40hex,event:COMMENT|APPROVE|REQUEST_CHANGES,body:string,comments?:array}; checks live head; do not retry unknown outcome. Automatic review uses COMMENT only.',
  create_branch:'{branch:string,sha:40hex}; never writes the default branch',
  update_file:'{path:string,branch:string,expected_sha:null|40hex,message:string,content_base64:string}; optimistic concurrency; include Assisted-by: Cindy (https://cindy.app) in AI-assisted commit message',
- edit_file:'{path:string,branch:string,expected_sha:40hex,expected_result_sha256:64hex,message:string,edits:[{old_text:string,new_text:string}]}; existing UTF-8 file only; unique sequential literal replacements, conditional single PUT; serialized operation <=261120 UTF-8 bytes, file <=525000 bytes; no default-branch write',
+ edit_file:'{path:string,branch:string,expected_sha:40hex,expected_result_sha256:64hex,message:string,edits:[{old_text:string,new_text:string}]}; existing UTF-8 file only; unique sequential literal replacements, conditional single PUT; serialized operation <=261120 UTF-8 bytes, file <=2097152 bytes; bounded same-SHA blob fallback; no default-branch write',
  admin_get:'{}; QQ only',
  admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ only; requires explicit user request for these settings',
  list_rulesets:'{}; QQ only',
