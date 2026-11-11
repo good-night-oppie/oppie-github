@@ -36,3 +36,13 @@ test('import selects an allowed repository and pins one validated policy snapsho
 test('invalid import policy fails closed before credentials are persisted',async()=>{
  const f=fixture({invalid:true});await f.send('import',{account:'deja',pem_path:path.resolve('synthetic.pem')});assert.equal(f.outputs[0].result.ok,false);assert.equal(f.outputs[0].result.errorCode,'INVALID_SCOPE_CONFIGURATION');assert.equal(f.saves(),0);
 });
+
+test('runtime synchronous guards return specific not-executed errors before client use',async()=>{
+ for(const [method,params,code] of [
+ ['run_confirmed',{input:{account:'qq',operation:'ruleset_update'},confirmation:''},'OWNER_CONFIRMATION_REQUIRED'],
+ ['inbox_service',{action:'invalid'},'INVALID_ACTION'],
+ ['import',{account:'deja',pem_path:'relative.pem'},'INVALID_IMPORT'],
+ ['unknown_method',{},'UNKNOWN_METHOD']]){
+  const f=fixture();await f.send(method,params);assert.equal(f.outputs[0].id,1);assert.equal(f.outputs[0].result.errorCode,code);assert.equal(f.outputs[0].result.execution,'not_executed');assert.equal(f.calls.length,0);assert.equal(f.saves(),0);assert.equal(f.clients.length,1);
+ }
+});
