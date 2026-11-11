@@ -16,7 +16,7 @@ module.exports={
  list_reviews:'{number:integer,page?:integer,per_page?:1..100}',
  submit_review:'{number:integer,commit_id:40hex,event:COMMENT|APPROVE|REQUEST_CHANGES,body:string,comments?:array}; checks live head; do not retry unknown outcome. Automatic review uses COMMENT only.',
  create_branch:'{branch:string,sha:40hex}; never writes the default branch',
- update_file:'{path:string,branch:string,expected_sha:null|40hex,message:string,content_base64:string}; optimistic concurrency; include Assisted-by: Cindy (https://cindy.app) in AI-assisted commit message',
+ update_file:'{path:string,branch:string,expected_sha:null|40hex,message:string,content_base64:string}; optimistic concurrency; max 700000 base64 characters; large content is internally transferred in bounded chunks; unknown write outcome requires readback before retry; include Assisted-by: Cindy (https://cindy.app) in AI-assisted commit message',
  admin_get:'{}; QQ only',
  admin_update:'{allow_squash_merge?:boolean,allow_merge_commit?:boolean,allow_rebase_merge?:boolean,delete_branch_on_merge?:boolean}; QQ only; requires explicit user request for these settings',
  list_rulesets:'{}; QQ only',
