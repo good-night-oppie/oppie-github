@@ -43,6 +43,47 @@ var require_owner_authorization = __commonJS({
   }
 });
 
+// node/file-edit.cjs
+var require_file_edit = __commonJS({
+  "node/file-edit.cjs"(exports2, module2) {
+    "use strict";
+    var crypto = require("node:crypto");
+    var MAX_FILE_BYTES = 525e3;
+    function validateEdits(edits, bad) {
+      if (!Array.isArray(edits) || !edits.length || edits.length > 100) bad("INVALID_EDITS");
+      for (const e of edits) {
+        if (!e || typeof e !== "object" || Array.isArray(e) || Object.keys(e).some((k) => !["old_text", "new_text"].includes(k))) bad("INVALID_EDITS");
+        if (typeof e.old_text !== "string" || !e.old_text.length || typeof e.new_text !== "string") bad("INVALID_EDITS");
+        for (const value of [e.old_text, e.new_text]) if (value.includes("\0") || Buffer.from(value, "utf8").toString("utf8") !== value) bad("INVALID_EDITS");
+      }
+    }
+    function applyEdits(current, args, bad) {
+      if (current?.sha !== args.expected_sha) bad("STALE_FILE");
+      if (current.type !== "file" || current.encoding !== "base64" || !Number.isSafeInteger(current.size) || current.size < 0) bad("INVALID_FILE_BASELINE");
+      if (current.size > MAX_FILE_BYTES) bad("FILE_TOO_LARGE");
+      if (typeof current.content !== "string" || !/^[A-Za-z0-9+/=\r\n]*$/.test(current.content)) bad("INVALID_FILE_BASELINE");
+      const encoded = current.content.replace(/[\r\n]/g, "");
+      if (encoded.length > 7e5) bad("FILE_TOO_LARGE");
+      const bytes = Buffer.from(encoded, "base64");
+      if (bytes.toString("base64") !== encoded || bytes.length !== current.size) bad("INVALID_FILE_BASELINE");
+      const gitSha = crypto.createHash("sha1").update("blob " + bytes.length + "\0").update(bytes).digest("hex");
+      if (gitSha !== args.expected_sha) bad("CONTENT_BASELINE_MISMATCH");
+      let text = bytes.toString("utf8");
+      if (!Buffer.from(text, "utf8").equals(bytes) || text.includes("\0")) bad("INVALID_FILE_ENCODING");
+      for (const edit of args.edits) {
+        const at = text.indexOf(edit.old_text);
+        if (at < 0 || text.indexOf(edit.old_text, at + 1) >= 0) bad("PATCH_CONFLICT");
+        text = text.slice(0, at) + edit.new_text + text.slice(at + edit.old_text.length);
+        if (Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) bad("FILE_TOO_LARGE");
+      }
+      const result = Buffer.from(text, "utf8");
+      if (crypto.createHash("sha256").update(result).digest("hex") !== args.expected_result_sha256) bad("CONTENT_SHA256_MISMATCH");
+      return result.toString("base64");
+    }
+    module2.exports = { MAX_FILE_BYTES, validateEdits, applyEdits };
+  }
+});
+
 // node/repository-policy.cjs
 var require_repository_policy = __commonJS({
   "node/repository-policy.cjs"(exports2, module2) {
@@ -108,6 +149,8 @@ var require_core = __commonJS({
     "use strict";
     var crypto = require("node:crypto");
     var { validateProof } = require_owner_authorization();
+    var { validateEdits, applyEdits } = require_file_edit();
+    var MAX_OPERATION_BYTES = 261120;
     var OWNER = "good-night-oppie";
     var { initialPolicy, validatePolicy } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
@@ -143,7 +186,7 @@ var require_core = __commonJS({
     function knownBotLogin(account, login) {
       return typeof login === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.some((slug) => login === slug + "[bot]");
     }
-    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "admin_get", "admin_update", ...QQ_ONLY]);
+    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "admin_get", "admin_update", ...QQ_ONLY]);
     var CoreError = class extends Error {
       constructor(code, execution = "not_executed", status) {
         super(code);
@@ -253,6 +296,7 @@ var require_core = __commonJS({
             };
             bad(code);
           };
+          if (Buffer.byteLength(JSON.stringify(input2 ?? null), "utf8") > MAX_OPERATION_BYTES) bad("REQUEST_TOO_LARGE");
           exact(input2, ["account", "repo", "operation", "args"]);
           if (typeof input2.account !== "string" || !Object.hasOwn(ACCOUNTS, input2.account)) bad("ACCOUNT_REQUIRED");
           const account = ACCOUNTS[input2.account];
@@ -272,7 +316,7 @@ var require_core = __commonJS({
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
           if (account.account === "reviewinbox") {
-            if (["create_branch", "update_file"].includes(operation)) bad("READ_ONLY_CONTENTS");
+            if (["create_branch", "update_file", "edit_file"].includes(operation)) bad("READ_ONLY_CONTENTS");
             if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
             if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
@@ -400,12 +444,26 @@ var require_core = __commonJS({
               filePath(args.path);
               ref(args.branch);
               if (!Object.hasOwn(args, "expected_sha") || args.expected_sha !== null && !/^[a-f0-9]{40}$/i.test(args.expected_sha)) bad();
-              if (typeof args.content_base64 !== "string" || args.content_base64.length > 7e5 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.content_base64)) bad();
+              if (typeof args.content_base64 !== "string" || args.content_base64.length > MAX_OPERATION_BYTES || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.content_base64)) bad();
               body = { message: nonempty(args.message, 500), content: args.content_base64, branch: args.branch, ...args.expected_sha ? { sha: args.expected_sha } : {} };
               method = "PUT";
               route = root + "/contents/" + filePath(args.path);
               preflight = { kind: "file", branch: args.branch, sha: args.expected_sha, path: args.path };
               break;
+            case "edit_file": {
+              exact(args, ["path", "branch", "expected_sha", "expected_result_sha256", "message", "edits"]);
+              filePath(args.path);
+              ref(args.branch);
+              sha(args.expected_sha);
+              nonempty(args.message, 500);
+              if (typeof args.expected_result_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(args.expected_result_sha256)) bad("INVALID_RESULT_SHA256");
+              validateEdits(args.edits, bad);
+              body = { message: args.message, branch: args.branch, sha: args.expected_sha.toLowerCase() };
+              method = "PUT";
+              route = root + "/contents/" + filePath(args.path);
+              preflight = { kind: "edit", branch: args.branch, sha: body.sha, path: args.path, editArgs: { ...args, expected_sha: body.sha, expected_result_sha256: args.expected_result_sha256.toLowerCase() } };
+              break;
+            }
             case "list_rulesets":
               exact(args, []);
               route = root + "/rulesets?includes_parents=true";
@@ -519,10 +577,10 @@ var require_core = __commonJS({
             if (pr?.head?.sha !== preflight.sha) bad("STALE_HEAD");
             if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
           }
-          if (preflight?.kind === "branch" || preflight?.kind === "file") {
+          if (preflight?.kind === "branch" || preflight?.kind === "file" || preflight?.kind === "edit") {
             const metadata = await api(root, token);
             if (metadata?.default_branch === preflight.branch) bad("DEFAULT_BRANCH_WRITE_REFUSED");
-            if (preflight.kind === "file") {
+            if (["file", "edit"].includes(preflight.kind)) {
               let current;
               try {
                 current = await api(root + "/contents/" + filePath(preflight.path) + "?ref=" + encodeURIComponent(preflight.branch), token);
@@ -530,6 +588,7 @@ var require_core = __commonJS({
                 if (e.status !== 404 || preflight.sha !== null) throw e;
               }
               if ((current?.sha ?? null) !== preflight.sha) bad("STALE_FILE");
+              if (preflight.kind === "edit") body.content = applyEdits(current, preflight.editArgs, bad);
             }
           }
           const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);

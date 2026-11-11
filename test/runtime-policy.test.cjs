@@ -10,7 +10,7 @@ function fixture({invalid=false}={}){
  const proc=new EventEmitter();proc.stdin=new EventEmitter();proc.stdout={write:s=>outputs.push(JSON.parse(s))};proc.exit=()=>{};
  const imports=[];
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../node/runtime.cjs'),'utf8'),{__dirname:path.join(__dirname,'../node'),process:proc,Buffer,console,require:name=>{
-  if(name==='node:readline')return {createInterface:()=>({on:(_,fn)=>{handler=fn;}})};
+  if(name==='./rpc-input.cjs')return {createReceiver:options=>{const r=require('../node/rpc-input.cjs').createReceiver(options);handler=line=>r.push(Buffer.from(line+'\n'));return r;}};
   if(name==='./repository-policy.cjs')return {...policyModule,initialPolicy:provider};
   if(name==='node:fs/promises')return {lstat:async()=>({isFile:()=>true,isSymbolicLink:()=>false,size:10}),readFile:async()=>Buffer.from('synthetic')};
   if(name==='node:crypto')return {createPrivateKey:()=>({}),createPublicKey:()=>({export:()=>Buffer.from('public')}),createHash:()=>({update:()=>({digest:()=> 'fingerprint'})})};
@@ -35,4 +35,14 @@ test('import selects an allowed repository and pins one validated policy snapsho
 });
 test('invalid import policy fails closed before credentials are persisted',async()=>{
  const f=fixture({invalid:true});await f.send('import',{account:'deja',pem_path:path.resolve('synthetic.pem')});assert.equal(f.outputs[0].result.ok,false);assert.equal(f.outputs[0].result.errorCode,'INVALID_SCOPE_CONFIGURATION');assert.equal(f.saves(),0);
+});
+
+test('runtime synchronous guards return specific not-executed errors before client use',async()=>{
+ for(const [method,params,code] of [
+ ['run_confirmed',{input:{account:'qq',operation:'ruleset_update'},confirmation:''},'OWNER_CONFIRMATION_REQUIRED'],
+ ['inbox_service',{action:'invalid'},'INVALID_ACTION'],
+ ['import',{account:'deja',pem_path:'relative.pem'},'INVALID_IMPORT'],
+ ['unknown_method',{},'UNKNOWN_METHOD']]){
+  const f=fixture();await f.send(method,params);assert.equal(f.outputs[0].id,1);assert.equal(f.outputs[0].result.errorCode,code);assert.equal(f.outputs[0].result.execution,'not_executed');assert.equal(f.calls.length,0);assert.equal(f.saves(),0);assert.equal(f.clients.length,1);
+ }
 });
