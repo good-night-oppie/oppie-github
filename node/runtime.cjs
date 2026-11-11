@@ -15,13 +15,14 @@ void inboxService.start();
 const shutdown=()=>inboxService.stop().finally(()=>process.exit(0));
 process.stdin.on('end',shutdown);process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 const queue=createQueue({client,statePath:path.join(store.paths.root,'review-state.json')});
+const rejectBeforeExecution=code=>{throw Object.assign(new Error(code),{code,execution:'not_executed'});};
 async function dispatch(method,args){
  if(method==='run_confirmed'){
   const {input,confirmation}=args;
-  if(!deployment.accounts.includes('qq')||input?.account!=='qq'||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)throw Error('OWNER_CONFIRMATION_REQUIRED');
+  if(!deployment.accounts.includes('qq')||input?.account!=='qq'||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)rejectBeforeExecution('OWNER_CONFIRMATION_REQUIRED');
   return createClient({repositoryPolicy,credentials:async a=>(await store.load(a)).privateKey,authorize:async()=>true,claimAuthorization:async nonce=>{await store.list();return require('./owner-authorization.cjs').claimNonce(path.join(store.paths.root,'qq-authorization-nonces'),nonce);}}).run(input);
  }
- if(method==='inbox_service'){if(Object.keys(args).some(k=>k!=='action')||!['start','stop','status'].includes(args.action))throw Error('INVALID_ACTION');return inboxService[args.action]();}
+ if(method==='inbox_service'){if(Object.keys(args).some(k=>k!=='action')||!['start','stop','status'].includes(args.action))rejectBeforeExecution('INVALID_ACTION');return inboxService[args.action]();}
  if(['run','import'].includes(method)&&!deployment.accounts.includes(args.account))return {ok:false,errorCode:'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST',execution:'not_executed'};
  if(method==='author_cue')return require('./author-cue.cjs').planAuthorCues(args);
  if(method==='accounts'){
@@ -38,12 +39,12 @@ async function dispatch(method,args){
  if(method==='review'){
   if(!deployment.automaticReviews)return {ok:false,errorCode:'AUTOMATION_DISABLED_BY_OWNER',message:'保留现有 Inbox 评审；本插件自动评审入口未启用。'};
   const {action,...input}=args;
-  if(!['initialize','poll','claim','finish'].includes(action))throw Error('INVALID_REVIEW_ACTION');
+  if(!['initialize','poll','claim','finish'].includes(action))rejectBeforeExecution('INVALID_REVIEW_ACTION');
   await store.list();return queue[action](input);
  }
  if(method==='import'){
-  if(!Object.hasOwn(ACCOUNTS,args.account)||typeof args.pem_path!=='string'||!path.isAbsolute(args.pem_path))throw Error('INVALID_IMPORT');
-  const st=await fs.lstat(args.pem_path);if(!st.isFile()||st.isSymbolicLink()||st.size>32768)throw Error('INVALID_KEY_FILE');
+  if(!Object.hasOwn(ACCOUNTS,args.account)||typeof args.pem_path!=='string'||!path.isAbsolute(args.pem_path))rejectBeforeExecution('INVALID_IMPORT');
+  const st=await fs.lstat(args.pem_path);if(!st.isFile()||st.isSymbolicLink()||st.size>32768)rejectBeforeExecution('INVALID_KEY_FILE');
   let bytes=await fs.readFile(args.pem_path);let pem=bytes.toString('utf8');
   let fingerprint,verification;
   try{
@@ -58,7 +59,7 @@ async function dispatch(method,args){
   if(imported.fingerprint!==fingerprint)throw Error('KEY_CHANGED_DURING_IMPORT');
   return {ok:true,account:imported,verification:verification.result};
  }
- throw Error('UNKNOWN_METHOD');
+ rejectBeforeExecution('UNKNOWN_METHOD');
 }
 function reply(message){process.stdout.write(JSON.stringify(message)+'\n');}
 const receiver=require('./rpc-input.cjs').createReceiver({dispatch,reply});
