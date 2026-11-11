@@ -232,3 +232,28 @@ test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail
  for(const extra of [{install:twoRepos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:full}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
  for(const repo of ['montclip-rsi','rsi-playbooks','oppie-github','sglang-review-inbox']){const f=riFixture();assert.equal((await f.client.run({account:'reviewinbox',repo,operation:'identity',args:{}})).ok,false);assert.equal(f.credentialsCalls(),0);}
 });
+
+
+test('large file crosses main, native framing, staging and original core with one SHA-checked PUT',async()=>{
+ const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
+ const f=fixture({override:(p,i)=>p.includes('/contents/')&&i.method==='GET'?{status:200,data:{sha:SHA}}:null});
+ const uploads=require('../node/file-upload.cjs').createUploads({accounts:['bb'],run:x=>f.client.run(x)});
+ let handler,serial=0;const replies=[],pending=new Map();
+ const receiver=require('../node/rpc-input.cjs').createReceiver({dispatch:(m,p)=>m==='run'?f.client.run(p):uploads.handle(m,p),reply:r=>pending.get(r.id)(r)});
+ const request=async r=>{assert.ok(Buffer.byteLength(JSON.stringify(r.params))<=262144);const id=++serial;const answer=new Promise(resolve=>pending.set(id,resolve));await receiver.push(Buffer.from(JSON.stringify({jsonrpc:'2.0',id,method:r.method,params:r.params})+'\n'));const result=await answer;pending.delete(id);assert.ok(!result.error);return {ok:true,result:result.result};};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{TextEncoder,cindy:{onHostMessage:f=>handler=f,node:{request},send:async x=>replies.push(x)}});
+ const content=Buffer.alloc(260876,7).toString('base64');
+ await handler({type:'tool-call',tool:'github',callId:'fixture-call',args:input('update_file',{path:'CLAUDE.md',branch:'docs/synthetic',expected_sha:SHA,message:'test',content_base64:content})});
+ assert.equal(replies[0].result.ok,true);const writes=f.calls.filter(x=>x.method==='PUT');assert.equal(writes.length,1);assert.equal(writes[0].parsed.content,content);assert.equal(writes[0].parsed.sha,SHA);assert.equal(uploads.stats().count,0);
+});
+test('assembled uploads still enforce original repository, branch, SHA and base64 validation',async()=>{
+ for(const [repo,args,error] of [
+ ['outside',{branch:'docs/test',content_base64:'aaaa'},'REPOSITORY_NOT_ALLOWED'],
+ ['MontClip',{branch:'main',content_base64:'aaaa'},'DEFAULT_BRANCH_WRITE_REFUSED'],
+ ['MontClip',{branch:'docs/test',content_base64:'aaaa'},'STALE_FILE'],
+ ['MontClip',{branch:'docs/test',content_base64:'a==='},'INVALID_ARGUMENTS']
+ ]){
+ const f=fixture();const u=require('../node/file-upload.cjs').createUploads({accounts:['bb'],run:x=>f.client.run(x)});
+ const {content_base64,...rest}=args;const start=await u.handle('upload_begin',{input:{account:'bb',repo,operation:'update_file',args:{path:'a.txt',expected_sha:SHA,message:'test',...rest}},total:content_base64.length});await u.handle('upload_chunk',{uploadId:start.uploadId,offset:0,content:content_base64});const result=await u.handle('upload_finish',{uploadId:start.uploadId});assert.equal(result.ok,false);assert.equal(f.calls.some(x=>x.method==='PUT'),false);assert.equal(result.errorCode,error);
+ }
+});
