@@ -10,7 +10,7 @@ function fixture({invalid=false}={}){
  const proc=new EventEmitter();proc.stdin=new EventEmitter();proc.stdout={write:s=>outputs.push(JSON.parse(s))};proc.exit=()=>{};
  const imports=[];
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../node/runtime.cjs'),'utf8'),{__dirname:path.join(__dirname,'../node'),process:proc,Buffer,console,require:name=>{
-  if(name==='node:readline')return {createInterface:()=>({on:(_,fn)=>{handler=fn;}})};
+  if(name==='./rpc-input.cjs')return {createReceiver:options=>{const r=require('../node/rpc-input.cjs').createReceiver(options);handler=line=>r.push(Buffer.from(line+'\n'));return r;}};
   if(name==='./repository-policy.cjs')return {...policyModule,initialPolicy:provider};
   if(name==='node:fs/promises')return {lstat:async()=>({isFile:()=>true,isSymbolicLink:()=>false,size:10}),readFile:async()=>Buffer.from('synthetic')};
   if(name==='node:crypto')return {createPrivateKey:()=>({}),createPublicKey:()=>({export:()=>Buffer.from('public')}),createHash:()=>({update:()=>({digest:()=> 'fingerprint'})})};
