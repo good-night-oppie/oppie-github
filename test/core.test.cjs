@@ -251,7 +251,7 @@ test('missing, repeated and overlapping matches reject atomically',async()=>{for
 test('stale SHA, result mismatch and late conflict never write',async()=>{const b=Buffer.from('OLD');for(const change of [{expected_sha:'a'.repeat(40)},{expected_result_sha256:'0'.repeat(64)},{edits:[{old_text:'OLD',new_text:'NEW'},{old_text:'missing',new_text:'z'}]}]){const f=editFixture(b),out=await f.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),...change}));assert.ok(['STALE_FILE','CONTENT_SHA256_MISMATCH','PATCH_CONFLICT'].includes(out.errorCode));assert.equal(out.execution,'not_executed');assert.equal(f.calls.some(x=>x.method==='PUT'),false);}});
 test('untrusted baseline type, size, encoding, bytes or Git blob hash are rejected',async()=>{const b=Buffer.from('OLD');for(const record of [{type:'symlink'},{type:'dir'},{encoding:'none'},{size:525001},{size:4},{size:-1},{content:'!!!!'},{content:'TkVX'},{sha:'a'.repeat(40)}]){const f=editFixture(b,{record}),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(out.ok,false);assert.equal(out.execution,'not_executed');assert.equal(f.calls.some(x=>x.method==='PUT'),false);}});
 test('invalid UTF-8 baseline is not silently repaired',async()=>{const b=Buffer.from([255,79,76,68]),f=editFixture(b),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(out.errorCode,'INVALID_FILE_ENCODING');assert.equal(f.calls.some(x=>x.method==='PUT'),false);});
-test('edit result and baseline use bounded byte lengths, preserving the old decoded ceiling',async()=>{for(const [size,newText,ok] of [[525000,'NEW',true],[525000,'LONG',false],[525001,'NEW',false]]){const b=Buffer.from('OLD'+'x'.repeat(size-3)),next=Buffer.from(newText+'x'.repeat(size-3)),f=editFixture(b),out=await f.client.run(input('edit_file',editArgs(b,next,[{old_text:'OLD',new_text:newText}])));assert.equal(out.ok,ok,JSON.stringify(out));assert.equal(f.calls.filter(x=>x.method==='PUT').length,ok?1:0);}});
+test('edit_file accepts base64 contents just above the former decoded ceiling',async()=>{for(const [size,newText,ok] of [[525000,'NEW',true],[525000,'LONG',true],[525001,'NEW',true]]){const b=Buffer.from('OLD'+'x'.repeat(size-3)),next=Buffer.from(newText+'x'.repeat(size-3)),f=editFixture(b),out=await f.client.run(input('edit_file',editArgs(b,next,[{old_text:'OLD',new_text:newText}])));assert.equal(out.ok,ok,JSON.stringify(out));assert.equal(f.calls.filter(x=>x.method==='PUT').length,ok?1:0);}});
 test('edit_file requires both hashes and exact bounded edits before credentials',async()=>{const b=Buffer.from('OLD');for(const changed of [{expected_sha:null},{expected_result_sha256:null},{expected_result_sha256:'x'.repeat(64)},{edits:[]},{edits:[{old_text:'',new_text:'NEW'}]},{edits:[{old_text:'OLD',new_text:'NEW',regex:true}]},{local_path:'forbidden'},{edits:[{old_text:'OLD',new_text:String.fromCharCode(0xd800)}]}]){const f=editFixture(b),out=await f.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),...changed}));assert.equal(out.ok,false);assert.equal(f.credentialsCalls(),0);}});
 test('all twelve account roles still apply to edit_file',async()=>{const b=Buffer.from('OLD');for(const account of Object.keys(ACCOUNTS)){const f=editFixture(b,{account}),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW')),account));assert.equal(out.ok,!['qq','reviewinbox'].includes(account),account+JSON.stringify(out));if(['qq','reviewinbox'].includes(account))assert.equal(f.credentialsCalls(),0);}});
 test('edit_file refuses default branch and never retries a failed or uncertain PUT',async()=>{const b=Buffer.from('OLD');const f=editFixture(b),denied=await f.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),branch:'main'}));assert.equal(denied.errorCode,'DEFAULT_BRANCH_WRITE_REFUSED');assert.equal(f.calls.some(x=>x.path.includes('/contents/')),false);for(const options of [{putStatus:409},{throwPut:true}]){const f=editFixture(b,options),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(out.ok,false);assert.equal(out.execution,options.throwPut?'unknown':'not_executed');assert.equal(f.calls.filter(x=>x.method==='PUT').length,1);}});
@@ -259,3 +259,57 @@ test('oversized complete update_file params fail before credentials even when ba
 
 test('edit_file independently verifies Git blob bytes and canonical base64, not only the advertised SHA',async()=>{const b=Buffer.from('OLD');for(const [record,code] of [[{content:'TkVX'},'CONTENT_BASELINE_MISMATCH'],[{content:'T0xE='},'INVALID_FILE_BASELINE'],[{content:'T0xE!'},'INVALID_FILE_BASELINE']]){const f=editFixture(b,{record});const r=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(r.errorCode,code);assert.equal(f.calls.filter(x=>x.method==='PUT').length,0);}});
 test('edit_file GET 404 cannot write; PUT 5xx and malformed success responses are unknown and never retried',async()=>{const b=Buffer.from('OLD');for(const mode of ['missing','server','invalid-json']){const f=fixture({override:(p,i)=>{if(!p.includes('/contents/'))return null;if(i.method==='GET')return mode==='missing'?{status:404,data:{}}:{status:200,data:{type:'file',encoding:'base64',sha:blobHash(b),size:b.length,content:b.toString('base64')}};if(i.method==='PUT')return mode==='server'?{status:503,data:{}}:{status:200,raw:'broken JSON'};}});const r=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(r.ok,false);assert.equal(r.execution,mode==='missing'?'not_executed':'unknown');assert.equal(f.calls.filter(x=>x.method==='PUT').length,mode==='missing'?0:1);assert.equal(r.errorCode,mode==='missing'?'GITHUB_HTTP_404':mode==='server'?'GITHUB_HTTP_503':'INVALID_API_RESPONSE');}});
+
+function blobEditFixture(bytes, options={}) {
+ const expectedSha=blobHash(bytes);
+ const encoded=bytes.toString('base64').match(/.{1,60}/g)?.join('\n')||'';
+ return fixture({override:(p,i)=>{
+  if(p.includes('/contents/')){
+   if(i.method==='GET')return {status:200,data:{type:'file',sha:expectedSha,size:bytes.length,encoding:'none',content:'',...options.contents}};
+   if(i.method==='PUT')return {status:200,data:{commit:{sha:SHA}}};
+  }
+  if(p.includes('/git/blobs/')){assert.equal(p.split('/').at(-1),expectedSha);const data={sha:expectedSha,size:bytes.length,encoding:'base64',content:encoded,...options.blob};return {status:200,...(options.rawBlob?{raw:options.rawBlob}:{data})};}
+  if(options.otherRaw && p.endsWith('/issues/42'))return {status:200,raw:options.otherRaw};
+  return null;
+ }});
+}
+const blobCalls=f=>f.calls.filter(c=>c.path.includes('/git/blobs/'));
+const puts=f=>f.calls.filter(c=>c.method==='PUT');
+test('2MiB: consumer and maximum files use contents then same-SHA blob then one conditional PUT',async()=>{
+ for(const size of [1376011,2097152]){
+ const bytes=Buffer.from('OLD'+'x'.repeat(size-3)),next=Buffer.from('NEW'+'x'.repeat(size-3));
+ const f=blobEditFixture(bytes),r=await f.client.run(input('edit_file',editArgs(bytes,next)));
+ assert.equal(r.ok,true,JSON.stringify(r));assert.equal(blobCalls(f).length,1);assert.equal(puts(f).length,1);
+ assert.equal(puts(f)[0].parsed.content,next.toString('base64'));assert.equal(puts(f)[0].parsed.sha,blobHash(bytes));
+ const business=f.calls.filter(c=>c.path.includes('/contents/')||c.path.includes('/git/blobs/'));assert.deepEqual(business.map(c=>c.method),['GET','GET','PUT']);
+ assert.ok(JSON.stringify(r).length<3000,'large baseline must not return to Agent');
+ }
+});
+test('2MiB: stale and invalid/oversize contents stop before blob and PUT',async()=>{
+ const bytes=Buffer.from('OLD');for(const contents of [{sha:'b'.repeat(40)},{size:2097153},{size:-1},{size:1.5},{type:'symlink'},{type:'dir'}]){
+ const f=blobEditFixture(bytes,{contents}),r=await f.client.run(input('edit_file',editArgs(bytes,Buffer.from('NEW'))));
+ assert.equal(r.ok,false);assert.equal(r.errorCode,contents.sha?'STALE_FILE':contents.size===2097153?'FILE_TOO_LARGE':'INVALID_FILE_BASELINE');assert.equal(blobCalls(f).length,0);assert.equal(puts(f).length,0);
+ }
+});
+test('2MiB: fallback requires none encoding, empty content and positive size',async()=>{
+ const bytes=Buffer.from('OLD');for(const contents of [{content:'x'},{size:0},{encoding:'utf8'},{encoding:null},{content:null}]){
+ const f=blobEditFixture(bytes,{contents}),r=await f.client.run(input('edit_file',editArgs(bytes,Buffer.from('NEW'))));assert.equal(r.ok,false);assert.equal(blobCalls(f).length,0);assert.equal(puts(f).length,0);
+ }
+ const f=blobEditFixture(bytes,{contents:{encoding:'base64',content:bytes.toString('base64')}});assert.equal((await f.client.run(input('edit_file',editArgs(bytes,Buffer.from('NEW'))))).ok,true);assert.equal(blobCalls(f).length,0);
+});
+test('2MiB: inconsistent blob metadata or SHA1 never PUT',async()=>{
+ const bytes=Buffer.from('OLD');for(const [blob,errorCode] of [[{sha:'b'.repeat(40)},'INVALID_FILE_BASELINE'],[{size:4},'INVALID_FILE_BASELINE'],[{encoding:'none'},'INVALID_FILE_BASELINE'],[{content:null},'INVALID_FILE_BASELINE'],[{content:Buffer.from('BAD').toString('base64')},'CONTENT_BASELINE_MISMATCH']]){
+ const f=blobEditFixture(bytes,{blob}),r=await f.client.run(input('edit_file',editArgs(bytes,Buffer.from('NEW'))));assert.equal(r.errorCode,errorCode);assert.equal(blobCalls(f).length,1);assert.equal(puts(f).length,0);
+ }
+});
+test('2MiB: intermediate/result overflow and result hash mismatch never PUT',async()=>{
+ const bytes=Buffer.from('OLD'+'x'.repeat(2097152-3));for(const edits of [[{old_text:'OLD',new_text:'LONG'}],[{old_text:'OLD',new_text:'LONG'},{old_text:'LONG',new_text:'NEW'}],[{old_text:'OLD',new_text:'NEW'}]]){
+ const f=blobEditFixture(bytes),r=await f.client.run(input('edit_file',editArgs(bytes,bytes,edits)));assert.equal(r.errorCode,edits[0].new_text==='LONG'?'FILE_TOO_LARGE':'CONTENT_SHA256_MISMATCH');assert.equal(puts(f).length,0);
+ }
+});
+test('2MiB: 3200000 response allowance applies only to internal blob read',async()=>{
+ const bytes=Buffer.from('OLD');const data={sha:blobHash(bytes),size:3,encoding:'base64',content:bytes.toString('base64')};const raw=JSON.stringify(data);for(const n of [3200000,3200001]){
+ const f=blobEditFixture(bytes,{rawBlob:raw+' '.repeat(n-Buffer.byteLength(raw))}),r=await f.client.run(input('edit_file',editArgs(bytes,Buffer.from('NEW'))));assert.equal(r.ok,n===3200000,JSON.stringify(r));assert.equal(puts(f).length,n===3200000?1:0);if(n>3200000)assert.equal(r.errorCode,'INVALID_API_RESPONSE');
+ }
+ const f=blobEditFixture(bytes,{otherRaw:'{}'+' '.repeat(2500001-2)}),r=await f.client.run(input('get_issue',{number:42}));assert.equal(r.errorCode,'INVALID_API_RESPONSE');assert.equal(blobCalls(f).length,0);
+});

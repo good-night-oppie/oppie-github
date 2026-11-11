@@ -48,7 +48,8 @@ var require_file_edit = __commonJS({
   "node/file-edit.cjs"(exports2, module2) {
     "use strict";
     var crypto = require("node:crypto");
-    var MAX_FILE_BYTES = 525e3;
+    var MAX_FILE_BYTES = 2097152;
+    var MAX_BASE64_CHARS = Math.ceil(MAX_FILE_BYTES / 3) * 4;
     function validateEdits(edits, bad) {
       if (!Array.isArray(edits) || !edits.length || edits.length > 100) bad("INVALID_EDITS");
       for (const e of edits) {
@@ -63,7 +64,7 @@ var require_file_edit = __commonJS({
       if (current.size > MAX_FILE_BYTES) bad("FILE_TOO_LARGE");
       if (typeof current.content !== "string" || !/^[A-Za-z0-9+/=\r\n]*$/.test(current.content)) bad("INVALID_FILE_BASELINE");
       const encoded = current.content.replace(/[\r\n]/g, "");
-      if (encoded.length > 7e5) bad("FILE_TOO_LARGE");
+      if (encoded.length > MAX_BASE64_CHARS) bad("FILE_TOO_LARGE");
       const bytes = Buffer.from(encoded, "base64");
       if (bytes.toString("base64") !== encoded || bytes.length !== current.size) bad("INVALID_FILE_BASELINE");
       const gitSha = crypto.createHash("sha1").update("blob " + bytes.length + "\0").update(bytes).digest("hex");
@@ -149,7 +150,7 @@ var require_core = __commonJS({
     "use strict";
     var crypto = require("node:crypto");
     var { validateProof } = require_owner_authorization();
-    var { validateEdits, applyEdits } = require_file_edit();
+    var { validateEdits, applyEdits, MAX_FILE_BYTES } = require_file_edit();
     var MAX_OPERATION_BYTES = 261120;
     var OWNER = "good-night-oppie";
     var { initialPolicy, validatePolicy } = require_repository_policy();
@@ -512,7 +513,7 @@ var require_core = __commonJS({
               body = { ...args };
               break;
           }
-          async function api(path, token2, method2 = "GET", payload) {
+          async function api(path, token2, method2 = "GET", payload, maxResponseBytes = 25e5) {
             if (!path.startsWith("/") || path.startsWith("//") || /[\r\n\\]/.test(path)) bad("INVALID_API_ROUTE");
             let response;
             try {
@@ -525,7 +526,7 @@ var require_core = __commonJS({
             let data;
             try {
               const text = await response.text();
-              if (Buffer.byteLength(text) > 25e5) throw Error();
+              if (Buffer.byteLength(text) > maxResponseBytes) throw Error();
               data = text ? JSON.parse(text) : null;
             } catch (_) {
               throw new CoreError("INVALID_API_RESPONSE", method2 === "GET" ? "not_executed" : "unknown");
@@ -588,7 +589,16 @@ var require_core = __commonJS({
                 if (e.status !== 404 || preflight.sha !== null) throw e;
               }
               if ((current?.sha ?? null) !== preflight.sha) bad("STALE_FILE");
-              if (preflight.kind === "edit") body.content = applyEdits(current, preflight.editArgs, bad);
+              if (preflight.kind === "edit") {
+                if (current.type !== "file" || !Number.isSafeInteger(current.size) || current.size < 0) bad("INVALID_FILE_BASELINE");
+                if (current.size > MAX_FILE_BYTES) bad("FILE_TOO_LARGE");
+                if (current.encoding === "none" && current.content === "" && current.size > 0) {
+                  const blob = await api(root + "/git/blobs/" + preflight.sha, token, "GET", void 0, 32e5);
+                  if (blob?.sha !== preflight.sha || blob.size !== current.size || blob.encoding !== "base64" || typeof blob.content !== "string") bad("INVALID_FILE_BASELINE");
+                  current = { ...current, encoding: blob.encoding, content: blob.content };
+                }
+                body.content = applyEdits(current, preflight.editArgs, bad);
+              }
             }
           }
           const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);

@@ -1,6 +1,7 @@
 'use strict';
 const crypto=require('node:crypto');
-const MAX_FILE_BYTES=525000;
+const MAX_FILE_BYTES=2097152;
+const MAX_BASE64_CHARS=Math.ceil(MAX_FILE_BYTES/3)*4;
 function validateEdits(edits,bad){
  if(!Array.isArray(edits)||!edits.length||edits.length>100)bad('INVALID_EDITS');
  for(const e of edits){
@@ -15,7 +16,7 @@ function applyEdits(current,args,bad){
  if(current.size>MAX_FILE_BYTES)bad('FILE_TOO_LARGE');
  if(typeof current.content!=='string'||!/^[A-Za-z0-9+/=\r\n]*$/.test(current.content))bad('INVALID_FILE_BASELINE');
  const encoded=current.content.replace(/[\r\n]/g,'');
- if(encoded.length>700000)bad('FILE_TOO_LARGE');
+ if(encoded.length>MAX_BASE64_CHARS)bad('FILE_TOO_LARGE');
  const bytes=Buffer.from(encoded,'base64');
  if(bytes.toString('base64')!==encoded||bytes.length!==current.size)bad('INVALID_FILE_BASELINE');
  const gitSha=crypto.createHash('sha1').update('blob '+bytes.length+'\0').update(bytes).digest('hex');
