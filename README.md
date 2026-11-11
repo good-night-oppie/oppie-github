@@ -41,3 +41,7 @@ predicate still fail closed as before; this patch does not change their handling
 This archival commit does not deploy or change running instances. deployment.json records the local profile; remote deployment allows only dd/gg/video. automaticReviews remains false. ReviewInbox is COMMENT-only. App IDs and installation IDs are identifiers, not credentials. Private keys and account ciphertext remain outside this repository.
 
 The owner or Rea must review QQ-specific tool changes; QQ cannot self-approve them. Other changes follow the applicable review gate before integration or deployment. Adding a submodule does not make its write-capable plugin part of the read-only RSI patrol execution path.
+
+## Large file updates
+
+In the bounded-transfer candidate, use the existing github operation update_file with content_base64, branch and expected_sha. The adapter transfers large content internally; agents must not call internal upload RPC methods, split the GitHub file into separate commits, or switch identities. The limit remains 700000 base64 characters, not 700000 decoded bytes. FILE_TOO_LARGE and UPLOAD_INTERRUPTED with execution:not_executed mean no file write was attempted. WRITE_OUTCOME_UNKNOWN with execution:unknown requires readback through the same account before any retry. A successful plugin call alone is not proof that GitHub wrote the file. Confirm the installed version before relying on this behavior.
