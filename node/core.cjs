@@ -20,7 +20,7 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
 const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','admin_get','admin_update',...QQ_ONLY]);
-class CoreError extends Error { constructor(code,execution='not_executed',status){super(code);this.code=code;this.execution=execution;if(status)this.status=status;} }
+class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
@@ -50,6 +50,17 @@ function makeJwt(account,pem,now=Date.now()){
 function listQuery(a,extra=[]){exact(a,['page','per_page',...extra]);const q=new URLSearchParams({page:String(a.page===undefined?1:positive(a.page)),per_page:String(a.per_page===undefined?30:positive(a.per_page))});if(Number(q.get('per_page'))>100)bad();return q;}
 function labels(value){if(!Array.isArray(value)||value.length>30)bad();return value.map(x=>nonempty(x,100));}
 function clean(value,secrets){if(typeof value==='string'){for(const secret of secrets)if(secret)value=value.split(secret).join('[REDACTED]');return value;}if(Array.isArray(value))return value.map(x=>clean(x,secrets));if(obj(value))return Object.fromEntries(Object.entries(value).filter(([k])=>!['token','access_token','private_key','authorization'].includes(k.toLowerCase())).map(([k,v])=>[k,clean(v,secrets)]));return value;}
+// enqueue_pull (#16): GraphQL reports failures as HTTP 200 + errors[]. Keep a
+// bounded, credential-free copy and classify it; never echo raw response objects.
+const QUEUE_STATE_QUERY='query($id:ID!){node(id:$id){... on PullRequest{isInMergeQueue headRefOid mergeQueueEntry{id state}}}}';
+function graphqlErrors(errors){return (Array.isArray(errors)?errors:[]).slice(0,5).map(e=>({type:typeof e?.type==='string'?e.type.slice(0,60):null,message:typeof e?.message==='string'?e.message.slice(0,300):null,path:Array.isArray(e?.path)?e.path.slice(0,5).map(String):null}));}
+function classifyQueueErrors(list){
+ const text=list.map(e=>(e.type||'')+' '+(e.message||'')).join(' | ');
+ if(list.some(e=>e.type==='FORBIDDEN')||/not accessible by integration|must have (?:write|push|admin)|permission|forbidden/i.test(text))return 'QUEUE_PERMISSION_DENIED';
+ if(/already (?:queued|enqueued|in (?:the )?merge queue)/i.test(text))return 'ALREADY_IN_MERGE_QUEUE';
+ if(/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text))return 'QUEUE_HEAD_MISMATCH';
+ return 'QUEUE_REJECTED';
+}
 function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
@@ -164,7 +175,10 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(!validateProof(proof,repo,args,now()))bad('OWNER_REFERENCE_UNVERIFIED');
     if(!await claimAuthorization(args.nonce))bad('OWNER_AUTHORIZATION_REPLAYED');
    }
-   if(preflight?.kind==='enqueue'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha||pr?.state!=='open'||pr?.draft||typeof pr.node_id!=='string')bad('STALE_OR_UNQUEUEABLE_HEAD');body={query:'mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}',variables:{id:pr.node_id,head:preflight.sha}};}
+   if(preflight?.kind==='enqueue'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha||pr?.state!=='open'||pr?.draft||typeof pr.node_id!=='string')bad('STALE_OR_UNQUEUEABLE_HEAD');preflight.nodeId=pr.node_id;
+    let before;try{before=(await api('/graphql',token,'POST',{query:QUEUE_STATE_QUERY,variables:{id:pr.node_id}}))?.data?.node;}catch(_){/* read-only probe; the mutation path re-reads */}
+    if(before?.isInMergeQueue===true)throw new CoreError('ALREADY_IN_MERGE_QUEUE','not_executed',undefined,{isInMergeQueue:true,mergeQueueEntry:before.mergeQueueEntry?{id:before.mergeQueueEntry.id,state:before.mergeQueueEntry.state}:null});
+    body={query:'mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}',variables:{id:pr.node_id,head:preflight.sha}};}
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
    if(preflight?.kind==='branch'||preflight?.kind==='file'||preflight?.kind==='edit'){
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
@@ -181,10 +195,25 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
       body.content=applyEdits(current,preflight.editArgs,bad);
      }}
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:await api(route,token,method,body);
-   if(operation==='enqueue_pull'&&(result?.errors||!result?.data?.enqueuePullRequest?.mergeQueueEntry?.id))throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown');
+   async function enqueue(){
+    // A GraphQL errors[] response is a definitive rejection only when a read-back
+    // confirms the PR is not queued; anything unreadable stays "unknown".
+    let response,transport;
+    try{response=await api(route,token,method,body);}catch(e){if(!(e instanceof CoreError)||e.execution!=='unknown')throw e;transport=e;}
+    if(!transport&&typeof response?.data?.enqueuePullRequest?.mergeQueueEntry?.id==='string'&&!response.errors)return response;
+    const errors=graphqlErrors(response?.errors);
+    let after;try{after=(await api('/graphql',token,'POST',{query:QUEUE_STATE_QUERY,variables:{id:preflight.nodeId}}))?.data?.node;}catch(_){after=undefined;}
+    const state=typeof after?.isInMergeQueue==='boolean'?{isInMergeQueue:after.isInMergeQueue,headRefOid:typeof after.headRefOid==='string'?after.headRefOid:null,mergeQueueEntry:after.mergeQueueEntry?{id:after.mergeQueueEntry.id,state:after.mergeQueueEntry.state}:null}:null;
+    if(state?.isInMergeQueue===true&&state.headRefOid===preflight.sha)return {data:{enqueuePullRequest:{mergeQueueEntry:state.mergeQueueEntry}},readback:state};
+    if(!state)throw new CoreError('QUEUE_RESULT_UNCONFIRMED','unknown',transport?.status,{githubErrors:errors,readback:'unavailable'});
+    if(state.isInMergeQueue===true||(state.headRefOid&&state.headRefOid!==preflight.sha))throw new CoreError('QUEUE_HEAD_MISMATCH','not_executed',undefined,{githubErrors:errors,readback:state});
+    if(transport)throw new CoreError('QUEUE_NOT_QUEUED_AFTER_UNKNOWN_WRITE','not_executed',transport.status,{githubErrors:errors,readback:state});
+    if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
+    throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
+   }
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
-  }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
+  }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
  return {run};
