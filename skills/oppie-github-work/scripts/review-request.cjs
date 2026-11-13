@@ -85,6 +85,247 @@ var require_file_edit = __commonJS({
   }
 });
 
+// node/commit-files.cjs
+var require_commit_files = __commonJS({
+  "node/commit-files.cjs"(exports2, module2) {
+    "use strict";
+    var crypto = require("node:crypto");
+    var fs = require("node:fs/promises");
+    var path = require("node:path");
+    var MAX_CHANGES = 500;
+    var MAX_LOCAL_FILE_BYTES = 50 * 1024 * 1024;
+    var MAX_LOCAL_TOTAL_BYTES = 200 * 1024 * 1024;
+    var BLOB_UPLOAD_TIMEOUT_MS = 11e4;
+    var ALLOW_FORCE_UPDATE = false;
+    var MODES = ["100644", "100755"];
+    var SOURCES = ["content_base64", "blob_sha", "local_file", "from", "delete", "gitlink_sha"];
+    var BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+    var HEX40 = /^[a-f0-9]{40}$/i;
+    function gitBlobSha(bytes) {
+      return crypto.createHash("sha1").update("blob " + bytes.length + "\0").update(bytes).digest("hex");
+    }
+    function assistedBy(message) {
+      return /^Assisted-by: \S.*$/m.test(message);
+    }
+    function validateCommitFiles(args, h) {
+      const { bad, exact, nonempty, sha, ref, filePath } = h;
+      exact(args, ["branch", "expected_head", "parent", "message", "changes", "force"]);
+      const branch = ref(args.branch);
+      if (!Object.hasOwn(args, "expected_head") || args.expected_head !== null && (typeof args.expected_head !== "string" || !HEX40.test(args.expected_head))) bad("INVALID_EXPECTED_HEAD");
+      const expectedHead = args.expected_head === null ? null : args.expected_head.toLowerCase();
+      if (args.parent !== void 0) sha(args.parent);
+      const parent = args.parent === void 0 ? expectedHead : args.parent.toLowerCase();
+      if (!parent) bad("PARENT_REQUIRED");
+      const message = nonempty(args.message, 1e4);
+      if (!assistedBy(message)) bad("ASSISTED_BY_REQUIRED");
+      if (args.force !== void 0 && typeof args.force !== "boolean") bad();
+      const force = args.force === true;
+      if (force && expectedHead === null) bad("FORCE_NOT_APPLICABLE");
+      if (expectedHead !== null && parent !== expectedHead && !force) bad("FORCE_REQUIRED");
+      if (force && !ALLOW_FORCE_UPDATE) bad("FORCE_UPDATE_DISABLED");
+      if (!Array.isArray(args.changes) || !args.changes.length || args.changes.length > MAX_CHANGES) bad("INVALID_CHANGES");
+      const changes = [], touched = /* @__PURE__ */ new Set();
+      const claim = (p) => {
+        filePath(p);
+        if (touched.has(p)) bad("DUPLICATE_PATH");
+        touched.add(p);
+        return p;
+      };
+      for (const c of args.changes) {
+        exact(c, ["path", ...SOURCES, "git_sha", "mode"]);
+        const sources = SOURCES.filter((k) => c[k] !== void 0);
+        if (sources.length !== 1) bad("INVALID_CHANGE_SOURCE");
+        const kind = sources[0];
+        if (c.git_sha !== void 0 && kind !== "local_file") bad("INVALID_CHANGE_SOURCE");
+        if (c.mode !== void 0 && (!MODES.includes(c.mode) || ["delete", "gitlink_sha"].includes(kind))) bad("INVALID_MODE");
+        const out = { kind, path: claim(c.path), mode: c.mode };
+        if (kind === "content_base64") {
+          if (typeof c.content_base64 !== "string" || !BASE64.test(c.content_base64)) bad("INVALID_CONTENT");
+          out.bytes = Buffer.from(c.content_base64, "base64");
+          out.sha = gitBlobSha(out.bytes);
+        } else if (kind === "blob_sha") out.sha = sha(c.blob_sha).toLowerCase();
+        else if (kind === "gitlink_sha") out.sha = sha(c.gitlink_sha).toLowerCase();
+        else if (kind === "delete") {
+          if (c.delete !== true) bad("INVALID_CHANGE_SOURCE");
+        } else if (kind === "from") {
+          out.from = claim(c.from);
+        } else if (kind === "local_file") {
+          if (typeof c.local_file !== "string" || c.local_file.includes("\0") || !path.isAbsolute(c.local_file)) bad("INVALID_LOCAL_FILE");
+          out.localFile = c.local_file;
+          out.sha = sha(c.git_sha).toLowerCase();
+        }
+        changes.push(out);
+      }
+      for (const p of touched) for (let i = p.indexOf("/"); i > 0; i = p.indexOf("/", i + 1)) if (touched.has(p.slice(0, i))) bad("PATH_CONFLICT");
+      return { branch, expectedHead, parent, message, force, changes, localTotalLimit: MAX_LOCAL_TOTAL_BYTES };
+    }
+    async function readLocalFile(file, maxBytes = MAX_LOCAL_FILE_BYTES) {
+      const fail = (code) => {
+        throw Object.assign(new Error(code), { code });
+      };
+      let st;
+      try {
+        st = await fs.lstat(file);
+      } catch (_) {
+        fail("LOCAL_FILE_UNAVAILABLE");
+      }
+      if (st.isSymbolicLink() || !st.isFile()) fail("LOCAL_FILE_NOT_REGULAR");
+      if (st.size > maxBytes) fail("LOCAL_FILE_TOO_LARGE");
+      let real;
+      try {
+        real = await fs.realpath(file);
+      } catch (_) {
+        fail("LOCAL_FILE_UNAVAILABLE");
+      }
+      const same = process.platform === "win32" ? real.toLowerCase() === path.resolve(file).toLowerCase() : real === path.resolve(file);
+      if (!same) fail("LOCAL_FILE_NOT_REGULAR");
+      const bytes = await fs.readFile(file);
+      if (bytes.length !== st.size || bytes.length > maxBytes) fail("LOCAL_FILE_CHANGED");
+      return bytes;
+    }
+    async function statLocalFile(file) {
+      let st;
+      try {
+        st = await fs.lstat(file);
+      } catch (_) {
+        return null;
+      }
+      return st.isSymbolicLink() || !st.isFile() ? { regular: false, size: st.size } : { regular: true, size: st.size };
+    }
+    function encodeRef(branch) {
+      return branch.split("/").map(encodeURIComponent).join("/");
+    }
+    async function commitFiles(ctx) {
+      let prepared;
+      try {
+        prepared = await prepare(ctx);
+      } catch (e) {
+        if (e instanceof ctx.CoreError && e.execution !== "not_executed") throw new ctx.CoreError(e.code === "WRITE_OUTCOME_UNKNOWN" ? "OBJECT_WRITE_FAILED" : e.code, "not_executed", e.status);
+        throw e;
+      }
+      return updateRef(ctx, prepared);
+    }
+    async function prepare({ plan, api, root, token, local, bad }) {
+      const { branch, expectedHead, parent, message, changes } = plan;
+      let total = 0;
+      for (const c of changes.filter((c2) => c2.kind === "local_file")) {
+        const st = await local.stat(c.localFile);
+        if (!st) bad("LOCAL_FILE_UNAVAILABLE");
+        if (!st.regular) bad("LOCAL_FILE_NOT_REGULAR");
+        if (st.size > MAX_LOCAL_FILE_BYTES) bad("LOCAL_FILE_TOO_LARGE");
+        total += st.size;
+        if (total > plan.localTotalLimit) bad("LOCAL_TOTAL_TOO_LARGE");
+      }
+      const refRoute = root + "/git/ref/heads/" + encodeRef(branch);
+      const readRef = async () => {
+        try {
+          const r = await api(refRoute, token);
+          if (r?.ref !== "refs/heads/" + branch || r?.object?.type !== "commit" || !HEX40.test(r?.object?.sha || "")) bad("INVALID_REF_RESPONSE");
+          return r.object.sha.toLowerCase();
+        } catch (e) {
+          if (e.status === 404) return null;
+          throw e;
+        }
+      };
+      const current = await readRef();
+      if (expectedHead === null && current !== null) bad("BRANCH_EXISTS");
+      if (expectedHead !== null && current !== expectedHead) bad("STALE_HEAD");
+      const parentCommit = await api(root + "/git/commits/" + parent, token);
+      if (parentCommit?.sha?.toLowerCase() !== parent || !HEX40.test(parentCommit?.tree?.sha || "")) bad("INVALID_PARENT");
+      const baseTree = parentCommit.tree.sha.toLowerCase();
+      const trees = /* @__PURE__ */ new Map();
+      const listTree = async (treeSha2) => {
+        if (!trees.has(treeSha2)) {
+          const t = await api(root + "/git/trees/" + treeSha2, token);
+          if (t?.sha?.toLowerCase() !== treeSha2 || !Array.isArray(t.tree)) bad("INVALID_TREE_RESPONSE");
+          if (t.truncated) bad("TREE_TRUNCATED");
+          trees.set(treeSha2, t.tree);
+        }
+        return trees.get(treeSha2);
+      };
+      const lookup = async (p) => {
+        let treeSha2 = baseTree, entry;
+        const parts = p.split("/");
+        for (let i = 0; i < parts.length; i++) {
+          entry = (await listTree(treeSha2)).find((e) => e?.path === parts[i]);
+          if (!entry) return null;
+          if (i < parts.length - 1) {
+            if (entry.type !== "tree") return null;
+            treeSha2 = String(entry.sha).toLowerCase();
+          }
+        }
+        return entry;
+      };
+      const entries = [];
+      for (const c of changes) {
+        if (c.kind === "delete") {
+          const e = await lookup(c.path);
+          if (!e || !["blob", "commit"].includes(e.type)) bad("DELETE_TARGET_MISSING");
+          entries.push({ path: c.path, mode: e.mode, type: e.type, sha: null });
+        } else if (c.kind === "from") {
+          const e = await lookup(c.from);
+          if (!e || !["blob", "commit"].includes(e.type) || !HEX40.test(e.sha || "")) bad("RENAME_SOURCE_MISSING");
+          if (await lookup(c.path)) bad("RENAME_TARGET_EXISTS");
+          if (c.mode && e.type !== "blob") bad("INVALID_MODE");
+          entries.push({ path: c.from, mode: e.mode, type: e.type, sha: null }, { path: c.path, mode: c.mode || e.mode, type: e.type, sha: e.sha.toLowerCase() });
+        } else if (c.kind === "gitlink_sha") entries.push({ path: c.path, mode: "160000", type: "commit", sha: c.sha });
+      }
+      const upload = async (bytes, expected) => {
+        const created = await api(root + "/git/blobs", token, "POST", { content: bytes.toString("base64"), encoding: "base64" }, void 0, BLOB_UPLOAD_TIMEOUT_MS);
+        if (created?.sha?.toLowerCase() !== expected) bad("BLOB_SHA_MISMATCH");
+      };
+      for (const c of changes) {
+        if (c.kind === "content_base64") {
+          await upload(c.bytes, c.sha);
+          entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
+        } else if (c.kind === "local_file") {
+          let bytes;
+          try {
+            bytes = await local.read(c.localFile);
+          } catch (e) {
+            bad(/^LOCAL_FILE_[A-Z_]+$/.test(e?.code || "") ? e.code : "LOCAL_FILE_UNAVAILABLE");
+          }
+          if (gitBlobSha(bytes) !== c.sha) bad("LOCAL_FILE_SHA_MISMATCH");
+          await upload(bytes, c.sha);
+          bytes = null;
+          entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
+        } else if (c.kind === "blob_sha") entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
+      }
+      const tree = await api(root + "/git/trees", token, "POST", { base_tree: baseTree, tree: entries });
+      const treeSha = String(tree?.sha || "").toLowerCase();
+      if (!HEX40.test(treeSha)) bad("INVALID_TREE_RESPONSE");
+      if (treeSha === baseTree) bad("NO_CHANGES");
+      const commit = await api(root + "/git/commits", token, "POST", { message, tree: treeSha, parents: [parent] });
+      const commitSha = String(commit?.sha || "").toLowerCase();
+      if (!HEX40.test(commitSha) || commit?.tree?.sha?.toLowerCase() !== treeSha || commit?.parents?.length !== 1 || commit.parents[0]?.sha?.toLowerCase() !== parent) bad("INVALID_COMMIT_RESPONSE");
+      return { commitSha, treeSha, readRef };
+    }
+    async function updateRef({ plan, api, root, token, repoUrl, CoreError }, { commitSha, treeSha, readRef }) {
+      const { branch, expectedHead, parent, changes } = plan;
+      const result = { branch, commit_sha: commitSha, tree_sha: treeSha, parent, previous_head: expectedHead, created_branch: expectedHead === null, changes: changes.length, html_url: repoUrl + "/commit/" + commitSha };
+      try {
+        if (expectedHead === null) await api(root + "/git/refs", token, "POST", { ref: "refs/heads/" + branch, sha: commitSha });
+        else await api(root + "/git/refs/heads/" + encodeRef(branch), token, "PATCH", { sha: commitSha, force: false });
+      } catch (e) {
+        if (!(e instanceof CoreError)) throw e;
+        if (e.execution === "not_executed") throw e;
+        let after;
+        try {
+          after = await readRef();
+        } catch (_) {
+          throw new CoreError(e.code, "unknown", e.status, { readback: "unavailable" });
+        }
+        if (after === commitSha) return { ...result, readback: true };
+        if (after === expectedHead) throw new CoreError(e.code, "not_executed", e.status, { readback: { head: after } });
+        throw new CoreError(e.code, "unknown", e.status, { readback: { head: after } });
+      }
+      return result;
+    }
+    var defaultLocal = { stat: statLocalFile, read: (file) => readLocalFile(file) };
+    module2.exports = { validateCommitFiles, commitFiles, readLocalFile, statLocalFile, gitBlobSha, defaultLocal, MAX_CHANGES, MAX_LOCAL_FILE_BYTES, MAX_LOCAL_TOTAL_BYTES, ALLOW_FORCE_UPDATE };
+  }
+});
+
 // node/repository-policy.cjs
 var require_repository_policy = __commonJS({
   "node/repository-policy.cjs"(exports2, module2) {
@@ -151,6 +392,7 @@ var require_core = __commonJS({
     var crypto = require("node:crypto");
     var { validateProof } = require_owner_authorization();
     var { validateEdits, applyEdits, MAX_FILE_BYTES } = require_file_edit();
+    var commitFilesModule = require_commit_files();
     var MAX_OPERATION_BYTES = 261120;
     var OWNER = "good-night-oppie";
     var { initialPolicy, validatePolicy } = require_repository_policy();
@@ -187,7 +429,7 @@ var require_core = __commonJS({
     function knownBotLogin(account, login) {
       return typeof login === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.some((slug) => login === slug + "[bot]");
     }
-    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "admin_get", "admin_update", ...QQ_ONLY]);
+    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "commit_files", "admin_get", "admin_update", ...QQ_ONLY]);
     var CoreError = class extends Error {
       constructor(code, execution = "not_executed", status, details) {
         super(code);
@@ -291,7 +533,7 @@ var require_core = __commonJS({
       if (/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text)) return "QUEUE_HEAD_MISMATCH";
       return "QUEUE_REJECTED";
     }
-    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
+    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, local = commitFilesModule.defaultLocal, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
         let secrets = [], scopeDiagnostics;
@@ -329,7 +571,7 @@ var require_core = __commonJS({
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
           if (account.account === "reviewinbox") {
-            if (["create_branch", "update_file", "edit_file"].includes(operation)) bad("READ_ONLY_CONTENTS");
+            if (["create_branch", "update_file", "edit_file", "commit_files"].includes(operation)) bad("READ_ONLY_CONTENTS");
             if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
             if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
@@ -477,6 +719,11 @@ var require_core = __commonJS({
               preflight = { kind: "edit", branch: args.branch, sha: body.sha, path: args.path, editArgs: { ...args, expected_sha: body.sha, expected_result_sha256: args.expected_result_sha256.toLowerCase() } };
               break;
             }
+            case "commit_files": {
+              const plan = commitFilesModule.validateCommitFiles(args, { bad, exact, nonempty, sha, ref, filePath });
+              preflight = { kind: "commit", branch: plan.branch, plan };
+              break;
+            }
             case "list_rulesets":
               exact(args, []);
               route = root + "/rulesets?includes_parents=true";
@@ -525,11 +772,11 @@ var require_core = __commonJS({
               body = { ...args };
               break;
           }
-          async function api(path, token2, method2 = "GET", payload, maxResponseBytes = 25e5) {
+          async function api(path, token2, method2 = "GET", payload, maxResponseBytes = 25e5, timeoutMs = 3e4) {
             if (!path.startsWith("/") || path.startsWith("//") || /[\r\n\\]/.test(path)) bad("INVALID_API_ROUTE");
             let response;
             try {
-              response = await fetcher("https://api.github.com" + path, { method: method2, headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "oppie-github-agent-plugin", Authorization: "Bearer " + token2, ...payload ? { "Content-Type": "application/json" } : {} }, redirect: "error", signal: AbortSignal.timeout(3e4), ...payload ? { body: JSON.stringify(payload) } : {} });
+              response = await fetcher("https://api.github.com" + path, { method: method2, headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "oppie-github-agent-plugin", Authorization: "Bearer " + token2, ...payload ? { "Content-Type": "application/json" } : {} }, redirect: "error", signal: AbortSignal.timeout(timeoutMs), ...payload ? { body: JSON.stringify(payload) } : {} });
             } catch (_) {
               throw new CoreError(method2 === "GET" ? "NETWORK_ERROR" : "WRITE_OUTCOME_UNKNOWN", method2 === "GET" ? "not_executed" : "unknown");
             }
@@ -597,7 +844,7 @@ var require_core = __commonJS({
             if (pr?.head?.sha !== preflight.sha) bad("STALE_HEAD");
             if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
           }
-          if (preflight?.kind === "branch" || preflight?.kind === "file" || preflight?.kind === "edit") {
+          if (["branch", "file", "edit", "commit"].includes(preflight?.kind)) {
             const metadata = await api(root, token);
             if (metadata?.default_branch === preflight.branch) bad("DEFAULT_BRANCH_WRITE_REFUSED");
             if (["file", "edit"].includes(preflight.kind)) {
@@ -644,7 +891,7 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, local, bad, CoreError }) : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
