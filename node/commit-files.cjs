@@ -4,11 +4,7 @@
 // not_executed. The ref update is the single visible write and is read back
 // when its outcome is uncertain; it is never retried automatically.
 const crypto=require('node:crypto');
-const fs=require('node:fs/promises');
-const path=require('node:path');
 const MAX_CHANGES=500;
-const MAX_LOCAL_FILE_BYTES=50*1024*1024;
-const MAX_LOCAL_TOTAL_BYTES=200*1024*1024;
 const BLOB_UPLOAD_TIMEOUT_MS=110000;
 // QQ decision on #19: force updates are never allowed. Only fast-forward
 // updates from the checked expected_head; anything else is NOT_FAST_FORWARD.
@@ -44,6 +40,9 @@ function validateCommitFiles(args,h){
   const sources=SOURCES.filter(k=>c[k]!==undefined);
   if(sources.length!==1)bad('INVALID_CHANGE_SOURCE');
   const kind=sources[0];
+  // QQ review on #20: reading local files is not part of this release. Large files
+  // are pushed as blobs through another channel first and referenced with blob_sha.
+  if(kind==='local_file')bad('LOCAL_FILE_DISABLED');
   if(c.git_sha!==undefined&&kind!=='local_file')bad('INVALID_CHANGE_SOURCE');
   if(c.mode!==undefined&&(!MODES.includes(c.mode)||['delete','gitlink_sha'].includes(kind)))bad('INVALID_MODE');
   const out={kind,path:claim(c.path),mode:c.mode};
@@ -52,30 +51,11 @@ function validateCommitFiles(args,h){
   else if(kind==='gitlink_sha')out.sha=sha(c.gitlink_sha).toLowerCase();
   else if(kind==='delete'){if(c.delete!==true)bad('INVALID_CHANGE_SOURCE');}
   else if(kind==='from'){out.from=claim(c.from);}
-  else if(kind==='local_file'){
-   if(typeof c.local_file!=='string'||c.local_file.includes('\0')||!path.isAbsolute(c.local_file))bad('INVALID_LOCAL_FILE');
-   out.localFile=c.local_file;out.sha=sha(c.git_sha).toLowerCase();
-  }
   changes.push(out);
  }
  // A path cannot be both a file and the directory of another changed path.
  for(const p of touched)for(let i=p.indexOf('/');i>0;i=p.indexOf('/',i+1))if(touched.has(p.slice(0,i)))bad('PATH_CONFLICT');
- return {branch,expectedHead,parent,mergeParent,message,changes,localTotalLimit:MAX_LOCAL_TOTAL_BYTES};
-}
-// Reads one regular local file, refusing a symlink at the path itself, after a size check.
-// Content is pinned by git_sha, so no realpath comparison (Windows 8.3 short paths differ).
-async function readLocalFile(file,maxBytes=MAX_LOCAL_FILE_BYTES){
- const fail=code=>{throw Object.assign(new Error(code),{code});};
- let st;try{st=await fs.lstat(file);}catch(_){fail('LOCAL_FILE_UNAVAILABLE');}
- if(st.isSymbolicLink()||!st.isFile())fail('LOCAL_FILE_NOT_REGULAR');
- if(st.size>maxBytes)fail('LOCAL_FILE_TOO_LARGE');
- const bytes=await fs.readFile(file);
- if(bytes.length!==st.size||bytes.length>maxBytes)fail('LOCAL_FILE_CHANGED');
- return bytes;
-}
-async function statLocalFile(file){
- let st;try{st=await fs.lstat(file);}catch(_){return null;}
- return st.isSymbolicLink()||!st.isFile()?{regular:false,size:st.size}:{regular:true,size:st.size};
+ return {branch,expectedHead,parent,mergeParent,message,changes};
 }
 function encodeRef(branch){return branch.split('/').map(encodeURIComponent).join('/');}
 async function commitFiles(ctx){
@@ -86,15 +66,8 @@ async function commitFiles(ctx){
  catch(e){if(e instanceof ctx.CoreError&&e.execution!=='not_executed')throw new ctx.CoreError(e.code==='WRITE_OUTCOME_UNKNOWN'?'OBJECT_WRITE_FAILED':e.code,'not_executed',e.status);throw e;}
  return updateRef(ctx,prepared);
 }
-async function prepare({plan,api,root,token,local,bad}){
+async function prepare({plan,api,root,token,bad}){
  const {branch,expectedHead,parent,mergeParent,message,changes}=plan;
- // 1. Local files: existence and size before any network work.
- let total=0;
- for(const c of changes.filter(c=>c.kind==='local_file')){
-  const st=await local.stat(c.localFile);
-  if(!st)bad('LOCAL_FILE_UNAVAILABLE');if(!st.regular)bad('LOCAL_FILE_NOT_REGULAR');if(st.size>MAX_LOCAL_FILE_BYTES)bad('LOCAL_FILE_TOO_LARGE');
-  total+=st.size;if(total>plan.localTotalLimit)bad('LOCAL_TOTAL_TOO_LARGE');
- }
  // 2. Branch state must match expected_head exactly.
  const refRoute=root+'/git/ref/heads/'+encodeRef(branch);
  const readRef=async()=>{try{const r=await api(refRoute,token);if(r?.ref!=='refs/heads/'+branch||r?.object?.type!=='commit'||!HEX40.test(r?.object?.sha||''))bad('INVALID_REF_RESPONSE');return r.object.sha.toLowerCase();}catch(e){if(e.status===404)return null;throw e;}};
@@ -122,18 +95,13 @@ async function prepare({plan,api,root,token,local,bad}){
   }
   else if(c.kind==='gitlink_sha')entries.push({path:c.path,mode:'160000',type:'commit',sha:c.sha});
  }
- // 5. Blobs: inline and local content are uploaded and verified by Git object ID.
+ // 5. Blobs: inline content is uploaded and verified by Git object ID.
  const upload=async(bytes,expected)=>{
   const created=await api(root+'/git/blobs',token,'POST',{content:bytes.toString('base64'),encoding:'base64'},undefined,BLOB_UPLOAD_TIMEOUT_MS);
   if(created?.sha?.toLowerCase()!==expected)bad('BLOB_SHA_MISMATCH');
  };
  for(const c of changes){
   if(c.kind==='content_base64'){await upload(c.bytes,c.sha);entries.push({path:c.path,mode:c.mode||'100644',type:'blob',sha:c.sha});}
-  else if(c.kind==='local_file'){
-   let bytes;try{bytes=await local.read(c.localFile);}catch(e){bad(/^LOCAL_FILE_[A-Z_]+$/.test(e?.code||'')?e.code:'LOCAL_FILE_UNAVAILABLE');}
-   if(gitBlobSha(bytes)!==c.sha)bad('LOCAL_FILE_SHA_MISMATCH');
-   await upload(bytes,c.sha);bytes=null;entries.push({path:c.path,mode:c.mode||'100644',type:'blob',sha:c.sha});
-  }
   else if(c.kind==='blob_sha')entries.push({path:c.path,mode:c.mode||'100644',type:'blob',sha:c.sha});
  }
  // 6. Tree and commit. Unchanged trees are refused instead of creating empty commits.
@@ -165,5 +133,4 @@ async function updateRef({plan,api,root,token,repoUrl,CoreError},{commitSha,tree
  }
  return result;
 }
-const defaultLocal={stat:statLocalFile,read:file=>readLocalFile(file)};
-module.exports={validateCommitFiles,commitFiles,readLocalFile,statLocalFile,gitBlobSha,defaultLocal,MAX_CHANGES,MAX_LOCAL_FILE_BYTES,MAX_LOCAL_TOTAL_BYTES};
+module.exports={validateCommitFiles,commitFiles,gitBlobSha,MAX_CHANGES};
