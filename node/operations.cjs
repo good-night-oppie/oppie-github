@@ -24,5 +24,5 @@ module.exports={
  get_ruleset:'{ruleset_id:integer}; QQ only',
  ruleset_update:'{ruleset_id:integer,ruleset:object,owner_authorization:GitHub comment URL,nonce:32hex}; QQ only; max160-character JSON change, 24h exact owner directive + one-use nonce + Host confirmation each call; nonce consumed before write, failures require readback and a new owner comment/nonce, never retry it',
  dismiss_review:'{number:integer,review_id:integer,message:string}; QQ only',
- enqueue_pull:'{number:integer,commit_id:40hex}; QQ only; no auto-merge fallback',
+ enqueue_pull:'{number:integer,commit_id:40hex}; QQ only; no auto-merge fallback; definite failures return not_executed with QUEUE_PERMISSION_DENIED|QUEUE_HEAD_MISMATCH|ALREADY_IN_MERGE_QUEUE|QUEUE_REJECTED and sanitized details.githubErrors; only an unreadable read-back stays QUEUE_RESULT_UNCONFIRMED',
 };
