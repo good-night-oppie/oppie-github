@@ -31,9 +31,11 @@ function sha(x){if(typeof x!=='string'||! /^[a-f0-9]{40}$/i.test(x))bad();return
 function ref(x){nonempty(x,200);if(/[\s~^:?*\[\\%\x00-\x1f]/.test(x)||x.includes('..')||x.includes('@{')||x.includes('//')||x.startsWith('/')||x.endsWith('/')||x.endsWith('.')||x.split('/').some(s=>s.startsWith('.')||s.endsWith('.lock')))bad('INVALID_REF');return x;}
 function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.startsWith('/')||/[\\%?#\x00-\x1f]/.test(x)||x.split('/').some(s=>!s||s==='.'||s==='..'))bad('INVALID_PATH');return x.split('/').map(encodeURIComponent).join('/');}
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
-function permissions(a){return {contents:['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
-function checkPermissions(actual,a,phase='execution'){
- const expected=permissions(a),rank={none:0,read:1,write:2};
+// #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
+// write) requests contents:write, which the QQ installation already holds.
+function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+function checkPermissions(actual,a,phase='execution',operation){
+ const expected=permissions(a,operation),rank={none:0,read:1,write:2};
  // PG may have additional owner-granted installation permissions. Never request
  // or accept them on its ordinary execution token; QQ's existing rules stay unchanged.
  const pgInstallation=phase==='installation'&&a.account==='pg';
@@ -163,9 +165,9 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     bad(code);
    }
    if(!exactRepos(probe,scope.installation))scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,scope.installation);
-   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account)});
+   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account,operation)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
-   const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account);
+   const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account,'execution',operation);
    const repos=await api('/installation/repositories?per_page=100',token);
    if(!exactRepos(repos))scopeMismatch('EXECUTION_REPOSITORY_SCOPE_MISMATCH',repos,expectedRepos);
    if(preflight?.kind==='owner_reference'){
