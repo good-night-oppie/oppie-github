@@ -50,9 +50,13 @@ Discover the live operations first. When edit_file is available, send one small 
 
 The plugin fetches the GitHub baseline on that branch, verifies its SHA and decoded bytes, applies the literal replacements in memory, verifies the entire result hash, and performs one conditional PUT. Preserve BOM and CRLF when calculating the result hash; never normalize text. Non-UTF-8, NUL-containing, symlink and oversized files are rejected. Baseline, intermediate and result files must each be <=525000 bytes, preserving the previous decoded content ceiling. The ordinary account/repository permissions and default-branch refusal still apply; QQ and ReviewInbox cannot use this authoring operation.
 
-The serialized operation object (including account, repo, operation and args) must be <=261120 UTF-8 bytes; 1024 bytes are reserved below the host's 262144-byte request limit. Count JSON bytes, not JavaScript string characters. The same budget applies to update_file, including base64 expansion and metadata. A new file whose complete request does not fit is unsupported in this release. No local path upload, cross-request fragments, resume cache, permission expansion or automatic write retries are provided.
+The serialized operation object (including account, repo, operation and args) must be <=261120 UTF-8 bytes; 1024 bytes are reserved below the host's 262144-byte request limit. Count JSON bytes, not JavaScript string characters. The same budget applies to update_file, including base64 expansion and metadata. A new file whose complete request does not fit is unsupported in this release. Apart from `commit_files` `local_file`, no local path upload, cross-request fragments, resume cache, permission expansion or automatic write retries are provided.
 
 REQUEST_TOO_LARGE and PATCH_CONFLICT mean no GitHub write occurred. A changed baseline fails without overwriting it. If the execution status is unknown, read back the exact branch/path before deciding whether to retry. An outer tool ok:true is not write success: inspect the inner ok/errorCode/execution fields. Error messages never forward raw host diagnostics.
+
+## Multi-file commits
+
+`commit_files` writes one commit with many changes (inline content, existing blobs, local files up to 50 MiB with a mandatory Git blob SHA, renames, deletes, gitlinks) through the Git Data API. `expected_head` must equal the live branch head (`null` creates a new branch from `parent`); the update is fast-forward only and force update is closed pending QQ's decision. The default branch is refused, the message must contain `Assisted-by:`, failures before the ref update are not_executed, and an uncertain ref update is read back once and never retried. Details: docs/commit-files.md.
 
 ## Commit identity for bot accounts
 
