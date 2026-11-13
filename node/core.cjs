@@ -64,7 +64,7 @@ function classifyQueueErrors(list){
  if(/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text))return 'QUEUE_HEAD_MISMATCH';
  return 'QUEUE_REJECTED';
 }
-function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,local=commitFilesModule.defaultLocal,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy}={}){
+function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
   let secrets=[],scopeDiagnostics;
@@ -219,7 +219,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,l
     if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,local,bad,CoreError}):await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
