@@ -10,8 +10,8 @@ const MAX_CHANGES=500;
 const MAX_LOCAL_FILE_BYTES=50*1024*1024;
 const MAX_LOCAL_TOTAL_BYTES=200*1024*1024;
 const BLOB_UPLOAD_TIMEOUT_MS=110000;
-// Force-updating a feature branch (rebase) is held closed until QQ decides on #19.
-const ALLOW_FORCE_UPDATE=false;
+// QQ decision on #19: force updates are never allowed. Only fast-forward
+// updates from the checked expected_head; anything else is NOT_FAST_FORWARD.
 const MODES=['100644','100755'];
 const SOURCES=['content_base64','blob_sha','local_file','from','delete','gitlink_sha'];
 const BASE64=/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -21,7 +21,7 @@ function assistedBy(message){return /^Assisted-by: \S.*$/m.test(message);}
 // Validation is pure: it runs before credentials are read or a token is minted.
 function validateCommitFiles(args,h){
  const {bad,exact,nonempty,sha,ref,filePath}=h;
- exact(args,['branch','expected_head','parent','message','changes','force']);
+ exact(args,['branch','expected_head','parent','merge_parent','message','changes']);
  const branch=ref(args.branch);
  if(!Object.hasOwn(args,'expected_head')||(args.expected_head!==null&&(typeof args.expected_head!=='string'||!HEX40.test(args.expected_head))))bad('INVALID_EXPECTED_HEAD');
  const expectedHead=args.expected_head===null?null:args.expected_head.toLowerCase();
@@ -30,11 +30,12 @@ function validateCommitFiles(args,h){
  if(!parent)bad('PARENT_REQUIRED');
  const message=nonempty(args.message,10000);
  if(!assistedBy(message))bad('ASSISTED_BY_REQUIRED');
- if(args.force!==undefined&&typeof args.force!=='boolean')bad();
- const force=args.force===true;
- if(force&&expectedHead===null)bad('FORCE_NOT_APPLICABLE');
- if(expectedHead!==null&&parent!==expectedHead&&!force)bad('FORCE_REQUIRED');
- if(force&&!ALLOW_FORCE_UPDATE)bad('FORCE_UPDATE_DISABLED');
+ // An existing branch only moves forward: the new commit's first parent is its current head.
+ if(expectedHead!==null&&parent!==expectedHead)bad('NOT_FAST_FORWARD');
+ // A merge commit (e.g. bringing a new main into a feature branch) keeps the branch
+ // head as first parent, so it is still a fast-forward and rewrites no history.
+ let mergeParent=null;
+ if(args.merge_parent!==undefined){if(expectedHead===null)bad('MERGE_PARENT_REQUIRES_EXISTING_BRANCH');mergeParent=sha(args.merge_parent).toLowerCase();if(mergeParent===parent)bad('INVALID_MERGE_PARENT');}
  if(!Array.isArray(args.changes)||!args.changes.length||args.changes.length>MAX_CHANGES)bad('INVALID_CHANGES');
  const changes=[],touched=new Set();
  const claim=p=>{filePath(p);if(touched.has(p))bad('DUPLICATE_PATH');touched.add(p);return p;};
@@ -59,17 +60,15 @@ function validateCommitFiles(args,h){
  }
  // A path cannot be both a file and the directory of another changed path.
  for(const p of touched)for(let i=p.indexOf('/');i>0;i=p.indexOf('/',i+1))if(touched.has(p.slice(0,i)))bad('PATH_CONFLICT');
- return {branch,expectedHead,parent,message,force,changes,localTotalLimit:MAX_LOCAL_TOTAL_BYTES};
+ return {branch,expectedHead,parent,mergeParent,message,changes,localTotalLimit:MAX_LOCAL_TOTAL_BYTES};
 }
-// Reads one regular local file without following a symlink, after a size check.
+// Reads one regular local file, refusing a symlink at the path itself, after a size check.
+// Content is pinned by git_sha, so no realpath comparison (Windows 8.3 short paths differ).
 async function readLocalFile(file,maxBytes=MAX_LOCAL_FILE_BYTES){
  const fail=code=>{throw Object.assign(new Error(code),{code});};
  let st;try{st=await fs.lstat(file);}catch(_){fail('LOCAL_FILE_UNAVAILABLE');}
  if(st.isSymbolicLink()||!st.isFile())fail('LOCAL_FILE_NOT_REGULAR');
  if(st.size>maxBytes)fail('LOCAL_FILE_TOO_LARGE');
- let real;try{real=await fs.realpath(file);}catch(_){fail('LOCAL_FILE_UNAVAILABLE');}
- const same=process.platform==='win32'?real.toLowerCase()===path.resolve(file).toLowerCase():real===path.resolve(file);
- if(!same)fail('LOCAL_FILE_NOT_REGULAR');
  const bytes=await fs.readFile(file);
  if(bytes.length!==st.size||bytes.length>maxBytes)fail('LOCAL_FILE_CHANGED');
  return bytes;
@@ -88,7 +87,7 @@ async function commitFiles(ctx){
  return updateRef(ctx,prepared);
 }
 async function prepare({plan,api,root,token,local,bad}){
- const {branch,expectedHead,parent,message,changes}=plan;
+ const {branch,expectedHead,parent,mergeParent,message,changes}=plan;
  // 1. Local files: existence and size before any network work.
  let total=0;
  for(const c of changes.filter(c=>c.kind==='local_file')){
@@ -106,6 +105,8 @@ async function prepare({plan,api,root,token,local,bad}){
  const parentCommit=await api(root+'/git/commits/'+parent,token);
  if(parentCommit?.sha?.toLowerCase()!==parent||!HEX40.test(parentCommit?.tree?.sha||''))bad('INVALID_PARENT');
  const baseTree=parentCommit.tree.sha.toLowerCase();
+ if(mergeParent){const mp=await api(root+'/git/commits/'+mergeParent,token);if(mp?.sha?.toLowerCase()!==mergeParent)bad('INVALID_MERGE_PARENT');}
+ const parents=mergeParent?[parent,mergeParent]:[parent];
  const trees=new Map();
  const listTree=async treeSha=>{if(!trees.has(treeSha)){const t=await api(root+'/git/trees/'+treeSha,token);if(t?.sha?.toLowerCase()!==treeSha||!Array.isArray(t.tree))bad('INVALID_TREE_RESPONSE');if(t.truncated)bad('TREE_TRUNCATED');trees.set(treeSha,t.tree);}return trees.get(treeSha);};
  const lookup=async p=>{let treeSha=baseTree,entry;const parts=p.split('/');for(let i=0;i<parts.length;i++){entry=(await listTree(treeSha)).find(e=>e?.path===parts[i]);if(!entry)return null;if(i<parts.length-1){if(entry.type!=='tree')return null;treeSha=String(entry.sha).toLowerCase();}}return entry;};
@@ -138,23 +139,25 @@ async function prepare({plan,api,root,token,local,bad}){
  // 6. Tree and commit. Unchanged trees are refused instead of creating empty commits.
  const tree=await api(root+'/git/trees',token,'POST',{base_tree:baseTree,tree:entries});
  const treeSha=String(tree?.sha||'').toLowerCase();if(!HEX40.test(treeSha))bad('INVALID_TREE_RESPONSE');
- if(treeSha===baseTree)bad('NO_CHANGES');
- const commit=await api(root+'/git/commits',token,'POST',{message,tree:treeSha,parents:[parent]});
+ // A merge may legitimately keep the first parent's tree; a plain commit may not.
+ if(treeSha===baseTree&&!mergeParent)bad('NO_CHANGES');
+ const commit=await api(root+'/git/commits',token,'POST',{message,tree:treeSha,parents});
  const commitSha=String(commit?.sha||'').toLowerCase();
- if(!HEX40.test(commitSha)||commit?.tree?.sha?.toLowerCase()!==treeSha||commit?.parents?.length!==1||commit.parents[0]?.sha?.toLowerCase()!==parent)bad('INVALID_COMMIT_RESPONSE');
+ if(!HEX40.test(commitSha)||commit?.tree?.sha?.toLowerCase()!==treeSha||commit?.parents?.length!==parents.length||parents.some((p,i)=>commit.parents[i]?.sha?.toLowerCase()!==p))bad('INVALID_COMMIT_RESPONSE');
  return {commitSha,treeSha,readRef};
 }
 async function updateRef({plan,api,root,token,repoUrl,CoreError},{commitSha,treeSha,readRef}){
- const {branch,expectedHead,parent,changes}=plan;
- // 7. The only visible write. Fast-forward only; never force in this release.
- const result={branch,commit_sha:commitSha,tree_sha:treeSha,parent,previous_head:expectedHead,created_branch:expectedHead===null,changes:changes.length,html_url:repoUrl+'/commit/'+commitSha};
+ const {branch,expectedHead,parent,mergeParent,changes}=plan;
+ // 7. The only visible write. Fast-forward only; force is never sent.
+ const result={branch,commit_sha:commitSha,tree_sha:treeSha,parent,merge_parent:mergeParent,previous_head:expectedHead,created_branch:expectedHead===null,changes:changes.length,html_url:repoUrl+'/commit/'+commitSha};
  try{
   if(expectedHead===null)await api(root+'/git/refs',token,'POST',{ref:'refs/heads/'+branch,sha:commitSha});
   else await api(root+'/git/refs/heads/'+encodeRef(branch),token,'PATCH',{sha:commitSha,force:false});
  }catch(e){
   if(!(e instanceof CoreError))throw e;
-  // A definite 4xx rejection (e.g. 422 not a fast-forward) wrote nothing.
-  if(e.execution==='not_executed')throw e;
+  // A definite 4xx rejection wrote nothing. GitHub answers 422 when the branch
+  // moved meanwhile and the update would not be a fast-forward.
+  if(e.execution==='not_executed'){if(expectedHead!==null&&e.status===422)throw new CoreError('NOT_FAST_FORWARD','not_executed',e.status);throw e;}
   let after;try{after=await readRef();}catch(_){throw new CoreError(e.code,'unknown',e.status,{readback:'unavailable'});}
   if(after===commitSha)return {...result,readback:true};
   if(after===expectedHead)throw new CoreError(e.code,'not_executed',e.status,{readback:{head:after}});
@@ -163,4 +166,4 @@ async function updateRef({plan,api,root,token,repoUrl,CoreError},{commitSha,tree
  return result;
 }
 const defaultLocal={stat:statLocalFile,read:file=>readLocalFile(file)};
-module.exports={validateCommitFiles,commitFiles,readLocalFile,statLocalFile,gitBlobSha,defaultLocal,MAX_CHANGES,MAX_LOCAL_FILE_BYTES,MAX_LOCAL_TOTAL_BYTES,ALLOW_FORCE_UPDATE};
+module.exports={validateCommitFiles,commitFiles,readLocalFile,statLocalFile,gitBlobSha,defaultLocal,MAX_CHANGES,MAX_LOCAL_FILE_BYTES,MAX_LOCAL_TOTAL_BYTES};
