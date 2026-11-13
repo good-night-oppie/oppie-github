@@ -239,11 +239,11 @@ var require_core = __commonJS({
       if (!Object.hasOwn(allowed, n)) bad("REPOSITORY_NOT_ALLOWED");
       return n;
     }
-    function permissions(a) {
-      return { contents: ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+    function permissions(a, operation) {
+      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
-    function checkPermissions(actual, a, phase = "execution") {
-      const expected = permissions(a), rank = { none: 0, read: 1, write: 2 };
+    function checkPermissions(actual, a, phase = "execution", operation) {
+      const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
       const pgInstallation = phase === "installation" && a.account === "pg";
       const allowSuperset = a.account === "qq" || pgInstallation;
       if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
@@ -566,11 +566,11 @@ var require_core = __commonJS({
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
           if (!exactRepos(probe, scope.installation)) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
-          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account) });
+          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account, operation) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
-          checkPermissions(tokenResponse.permissions, account);
+          checkPermissions(tokenResponse.permissions, account, "execution", operation);
           const repos = await api("/installation/repositories?per_page=100", token);
           if (!exactRepos(repos)) scopeMismatch("EXECUTION_REPOSITORY_SCOPE_MISMATCH", repos, expectedRepos);
           if (preflight?.kind === "owner_reference") {
