@@ -4,10 +4,11 @@
 
 ## Request
 
-`{branch, expected_head, parent?, message, changes[], force?}`
+`{branch, expected_head, parent?, merge_parent?, message, changes[]}`
 
 - `expected_head`: the 40-hex commit the branch must point to right now; otherwise `STALE_HEAD` and nothing is written. `null` creates a new branch (refused with `BRANCH_EXISTS` if it exists) and then `parent` is required.
-- `parent`: parent of the new commit; defaults to `expected_head`.
+- `parent`: first parent of the new commit; defaults to `expected_head`. For an existing branch it must equal `expected_head`, otherwise `NOT_FAST_FORWARD`.
+- `merge_parent`: optional second parent for an existing branch. The commit is a merge whose first parent is the current head, so the branch still moves forward and no history is rewritten (use it to bring a new main into a feature branch; `changes` describe the merged tree relative to the branch head).
 - `message` must contain an `Assisted-by:` line (`ASSISTED_BY_REQUIRED`).
 - `changes[]` (1–500, unique paths, no file/directory overlap). Each change has exactly one source:
   - `{path, content_base64, mode?}` inline content;
@@ -22,11 +23,14 @@
 
 Validate everything (before credentials) → token → refuse the default branch → read the branch ref and compare with `expected_head` → read the parent commit/tree → walk the parent tree for deletes and rename sources → create blobs and compare GitHub's SHA with the local one → create a tree on `base_tree` → refuse an unchanged tree (`NO_CHANGES`) → create the commit → update the ref.
 
-Everything before the ref update only creates unreferenced objects, so every failure there is `not_executed` (an uncertain object POST is reported as `OBJECT_WRITE_FAILED`). The ref update is the single visible write: `POST refs` for a new branch, otherwise `PATCH` with `force:false`, so GitHub itself rejects anything that is not a fast-forward (a concurrent push fails with `GITHUB_HTTP_422`, not overwritten). If that outcome is uncertain the plugin reads the ref back once: the new commit means success (`readback:true`), the old head means `not_executed`, anything else stays `unknown`. It never retries.
+Everything before the ref update only creates unreferenced objects, so every failure there is `not_executed` (an uncertain object POST is reported as `OBJECT_WRITE_FAILED`). The ref update is the single visible write: `POST refs` for a new branch, otherwise `PATCH` with `force:false`, so GitHub itself rejects anything that is not a fast-forward (a concurrent push fails with `NOT_FAST_FORWARD`, not overwritten). If that outcome is uncertain the plugin reads the ref back once: the new commit means success (`readback:true`), the old head means `not_executed`, anything else stays `unknown`. It never retries.
+
+## No force updates (QQ decision on #19)
+
+Force updates are never allowed and there is no `force` argument. The live branch head must equal `expected_head`, the new commit's first parent must be that head, and the ref update is sent with `force:false`; anything else fails with `NOT_FAST_FORWARD` and writes nothing. To bring a feature branch up to a new main, either merge it in on the same branch (`merge_parent:<new main>`) or start a new branch from the new main (`expected_head:null`, `parent:<new main>`) and open a replacement pull request.
 
 ## Held for QQ
 
-- Force update (rebase onto a new base on the same branch) is closed: `parent ≠ expected_head` needs `force:true`, which returns `FORCE_UPDATE_DISABLED`. To rebase, push to a new branch (`expected_head:null`, `parent:<new main>`) and open a new pull request.
 - `local_file` is a narrow exception to the earlier "no local path upload" rule. If QQ declines it, large new files can only be referenced with `blob_sha`.
 
 ## Why not dir_deposit or a git bundle
