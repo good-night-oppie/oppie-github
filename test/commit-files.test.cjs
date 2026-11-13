@@ -177,7 +177,7 @@ test('a concurrent push between object creation and ref update is not overwritte
   if(p===ROOT+'/git/commits'&&init.method==='POST'&&!git.raced){git.raced=true;const other=git.commit(git.commits.get(git.refs.get('feature/x')).tree.sha,[git.refs.get('feature/x')],'someone else');git.refs.set('feature/x',other);}
  }});
  const r=await run(f,base(f,{changes:[{path:'README.md',content_base64:b64('mine')}]}));
- assert.equal(r.ok,false);assert.equal(r.errorCode,'GITHUB_HTTP_422');assert.equal(r.execution,'not_executed');
+ assert.equal(r.ok,false);assert.equal(r.errorCode,'NOT_FAST_FORWARD');assert.equal(r.execution,'not_executed');
  assert.notEqual(f.git.refs.get('feature/x'),f.head);assert.equal(f.git.commits.get(f.git.refs.get('feature/x')).message,'someone else');
  assert.equal(f.calls.filter(c=>c.method==='PATCH').length,1,'never retried');
 });
@@ -193,13 +193,31 @@ test('expected_head null creates a new branch from parent and refuses an existin
  assert.equal(missing.errorCode,'PARENT_REQUIRED');
 });
 
-test('force update is held closed pending QQ and a rewrite without force is refused',async()=>{
+test('force update does not exist: a rewrite is NOT_FAST_FORWARD and force is an unknown argument',async()=>{
  const f=fixture();
- for(const [extra,code] of [[{parent:'b'.repeat(40)},'FORCE_REQUIRED'],[{parent:'b'.repeat(40),force:true},'FORCE_UPDATE_DISABLED'],[{force:true},'FORCE_UPDATE_DISABLED']]){
+ for(const [extra,code] of [[{parent:'b'.repeat(40)},'NOT_FAST_FORWARD'],[{force:true},'INVALID_ARGUMENTS'],[{force:false},'INVALID_ARGUMENTS'],[{expected_head:null,parent:f.head,merge_parent:'b'.repeat(40)},'MERGE_PARENT_REQUIRES_EXISTING_BRANCH'],[{merge_parent:f.head},'INVALID_MERGE_PARENT']]){
   const r=await run(f,base(f,{...extra,changes:[{path:'README.md',content_base64:b64('x')}]}));
-  assert.equal(r.errorCode,code);assert.equal(r.execution,'not_executed');
+  assert.equal(r.errorCode,code,JSON.stringify(extra));assert.equal(r.execution,'not_executed');
  }
  assert.equal(f.credentialsCalls(),0);assert.equal(f.calls.length,0);
+ assert.equal(/force:true/.test(fs.readFileSync(path.join(__dirname,'..','node','commit-files.cjs'),'utf8')),false,'force is never sent');
+});
+
+test('merging a new main into a feature branch is a fast-forward merge commit, not a rewrite',async()=>{
+ const f=fixture();
+ // main moves ahead with its own change.
+ const mainFiles={...f.git.flatten(f.git.commits.get(f.head).tree.sha),'MAIN.md':{mode:'100644',type:'blob',sha:f.git.putBlob(Buffer.from('main\n'))}};
+ const newMain=f.git.commit(f.git.build(mainFiles),[f.head],'main moved');f.git.refs.set('main',newMain);
+ const r=await run(f,base(f,{merge_parent:newMain,message:'Merge main into feature/x\n\nAssisted-by: Cindy (https://cindy.app)',changes:[{path:'MAIN.md',blob_sha:mainFiles['MAIN.md'].sha}]}));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ const c=f.git.commits.get(f.git.refs.get('feature/x'));
+ assert.deepEqual(c.parents,[{sha:f.head},{sha:newMain}],'old head stays the first parent');
+ assert.equal(f.calls.find(x=>x.method==='PATCH').body.force,false);
+ assert.equal(r.result.merge_parent,newMain);
+ // A merge parent that GitHub cannot find writes nothing.
+ const g=fixture();
+ const missing=await run(g,base(g,{merge_parent:'9'.repeat(40),changes:[{path:'a',content_base64:b64('a')}]}));
+ assert.equal(missing.errorCode,'GITHUB_HTTP_404');assert.equal(missing.execution,'not_executed');assert.equal(g.writes().length,0);
 });
 
 test('bad change lists are refused before credentials',async()=>{
