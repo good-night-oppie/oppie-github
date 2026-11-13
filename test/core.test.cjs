@@ -313,3 +313,67 @@ test('2MiB: 3200000 response allowance applies only to internal blob read',async
  }
  const f=blobEditFixture(bytes,{otherRaw:'{}'+' '.repeat(2500001-2)}),r=await f.client.run(input('get_issue',{number:42}));assert.equal(r.errorCode,'INVALID_API_RESPONSE');assert.equal(blobCalls(f).length,0);
 });
+
+// #16: enqueue_pull must classify GraphQL errors[] and read back isInMergeQueue.
+function queueFixture({before={isInMergeQueue:false,headRefOid:SHA,mergeQueueEntry:null},mutation,after=before,restHead=SHA}={}){
+ let reads=0; return fixture({account:'qq',override(path,init){
+  if(path.endsWith('/pulls/7'))return {status:200,data:{node_id:'PR_test',state:'open',draft:false,head:{sha:restHead}}};
+  if(path!=='/graphql')return;
+  const q=JSON.parse(init.body).query;
+  if(q.startsWith('mutation'))return typeof mutation==='function'?mutation():mutation;
+  reads++;
+  const node=reads===1?before:after;return node instanceof Error?{status:502,data:{message:'bad gateway'}}:{status:200,data:{data:{node}}};
+ }});
+}
+const mutations=calls=>calls.filter(c=>c.path==='/graphql'&&c.parsed.query.startsWith('mutation'));
+const FORBIDDEN={status:200,data:{data:{enqueuePullRequest:null},errors:[{type:'FORBIDDEN',path:['enqueuePullRequest'],locations:[{line:1,column:46}],message:'Resource not accessible by integration'}]}};
+test('#16 enqueue permission denied is a definite not_executed failure with sanitized GitHub error',async()=>{
+ const f=queueFixture({mutation:FORBIDDEN});
+ const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(r.ok,false);assert.equal(r.errorCode,'QUEUE_PERMISSION_DENIED');assert.equal(r.execution,'not_executed');
+ assert.deepEqual(r.details.githubErrors,[{type:'FORBIDDEN',message:'Resource not accessible by integration',path:['enqueuePullRequest']}]);
+ assert.equal(r.details.readback.isInMergeQueue,false);assert.equal(mutations(f.calls).length,1);
+ assert.equal(JSON.stringify(r).includes('secret-token'),false);assert.equal(JSON.stringify(r).includes('PRIVATE KEY'),false);
+});
+test('#16 enqueue head mismatch fails before or after the mutation without retrying',async()=>{
+ const stale=queueFixture({restHead:'b'.repeat(40)});
+ const s=await stale.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(s.errorCode,'STALE_OR_UNQUEUEABLE_HEAD');assert.equal(s.execution,'not_executed');assert.equal(stale.calls.some(c=>c.path==='/graphql'),false);
+ const moved=queueFixture({mutation:{status:200,data:{data:{enqueuePullRequest:null},errors:[{type:'UNPROCESSABLE',path:['enqueuePullRequest'],message:'Expected head oid does not match the pull request head'}]}},after:{isInMergeQueue:false,headRefOid:'c'.repeat(40),mergeQueueEntry:null}});
+ const m=await moved.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(m.ok,false);assert.equal(m.errorCode,'QUEUE_HEAD_MISMATCH');assert.equal(m.execution,'not_executed');assert.equal(mutations(moved.calls).length,1);
+});
+test('#16 enqueue of a PR already in the merge queue sends no mutation',async()=>{
+ const f=queueFixture({before:{isInMergeQueue:true,headRefOid:SHA,mergeQueueEntry:{id:'MQ_1',state:'QUEUED'}}});
+ const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(r.ok,false);assert.equal(r.errorCode,'ALREADY_IN_MERGE_QUEUE');assert.equal(r.execution,'not_executed');
+ assert.deepEqual(r.details.mergeQueueEntry,{id:'MQ_1',state:'QUEUED'});assert.equal(mutations(f.calls).length,0);
+});
+test('#16 normal enqueue completes with one mutation bound to the head',async()=>{
+ const f=queueFixture({mutation:{status:200,data:{data:{enqueuePullRequest:{mergeQueueEntry:{id:'MQ_ok'}}}}}});
+ const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(r.ok,true);assert.equal(r.receipt.execution,'completed');assert.equal(r.result.data.enqueuePullRequest.mergeQueueEntry.id,'MQ_ok');
+ const sent=mutations(f.calls);assert.equal(sent.length,1);assert.deepEqual(sent[0].parsed.variables,{id:'PR_test',head:SHA});
+});
+test('#16 transport-unknown enqueue reads back once before deciding',async()=>{
+ const queued=queueFixture({mutation:{status:502,data:{message:'bad gateway'}},after:{isInMergeQueue:true,headRefOid:SHA,mergeQueueEntry:{id:'MQ_2',state:'QUEUED'}}});
+ const q=await queued.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));assert.equal(q.ok,true);assert.equal(q.result.readback.isInMergeQueue,true);
+ const missing=queueFixture({mutation:{status:502,data:{message:'bad gateway'}}});
+ const n=await missing.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));assert.equal(n.errorCode,'QUEUE_NOT_QUEUED_AFTER_UNKNOWN_WRITE');assert.equal(n.execution,'not_executed');
+ const blind=queueFixture({mutation:{status:502,data:{message:'bad gateway'}},after:new Error('down')});
+ const b=await blind.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));assert.equal(b.errorCode,'QUEUE_RESULT_UNCONFIRMED');assert.equal(b.execution,'unknown');assert.equal(mutations(blind.calls).length,1);
+});
+test('#16 only QQ enqueue_pull requests a contents:write token; every other call keeps its scope',async()=>{
+ const tokenRequests=calls=>calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repository_ids).map(c=>c.parsed.permissions.contents);
+ const enq=queueFixture({mutation:{status:200,data:{data:{enqueuePullRequest:{mergeQueueEntry:{id:'MQ_w'}}}}}});
+ assert.equal((await enq.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'))).ok,true);assert.deepEqual(tokenRequests(enq.calls),['write']);
+ const qqOps=[['identity',{}],['get_pull',{number:7}],['list_rulesets',{}],['submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'ok'}],['dismiss_review',{number:7,review_id:4,message:'m'}]];
+ for(const [operation,args] of qqOps){const f=fixture({account:'qq'});await f.client.run(input(operation,args,'qq'));assert.deepEqual(tokenRequests(f.calls),['read'],operation);}
+ const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['read']);
+ const bb=fixture();await bb.client.run(input('get_pull',{number:7}));assert.deepEqual(tokenRequests(bb.calls),['write']);
+});
+test('#16 enqueue_pull refuses a token GitHub narrowed below contents:write before any GraphQL call',async()=>{
+ const f=fixture({account:'qq',override(path,init){if(path.endsWith('/access_tokens')&&JSON.parse(init.body).repository_ids)return {status:201,data:{token:'secret-token-narrow',expires_at:new Date(NOW+3600000).toISOString(),permissions:{contents:'read',issues:'write',pull_requests:'write',metadata:'read',administration:'write'}}};}});
+ const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(r.errorCode,'PERMISSION_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(f.calls.some(c=>c.path==='/graphql'),false);
+});

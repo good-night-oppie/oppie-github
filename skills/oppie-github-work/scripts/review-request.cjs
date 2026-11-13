@@ -189,11 +189,12 @@ var require_core = __commonJS({
     }
     var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "admin_get", "admin_update", ...QQ_ONLY]);
     var CoreError = class extends Error {
-      constructor(code, execution = "not_executed", status) {
+      constructor(code, execution = "not_executed", status, details) {
         super(code);
         this.code = code;
         this.execution = execution;
         if (status) this.status = status;
+        if (details) this.details = details;
       }
     };
     function bad(code = "INVALID_ARGUMENTS") {
@@ -238,11 +239,11 @@ var require_core = __commonJS({
       if (!Object.hasOwn(allowed, n)) bad("REPOSITORY_NOT_ALLOWED");
       return n;
     }
-    function permissions(a) {
-      return { contents: ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+    function permissions(a, operation) {
+      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
-    function checkPermissions(actual, a, phase = "execution") {
-      const expected = permissions(a), rank = { none: 0, read: 1, write: 2 };
+    function checkPermissions(actual, a, phase = "execution", operation) {
+      const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
       const pgInstallation = phase === "installation" && a.account === "pg";
       const allowSuperset = a.account === "qq" || pgInstallation;
       if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
@@ -278,6 +279,17 @@ var require_core = __commonJS({
       if (Array.isArray(value)) return value.map((x) => clean(x, secrets));
       if (obj(value)) return Object.fromEntries(Object.entries(value).filter(([k]) => !["token", "access_token", "private_key", "authorization"].includes(k.toLowerCase())).map(([k, v]) => [k, clean(v, secrets)]));
       return value;
+    }
+    var QUEUE_STATE_QUERY = "query($id:ID!){node(id:$id){... on PullRequest{isInMergeQueue headRefOid mergeQueueEntry{id state}}}}";
+    function graphqlErrors(errors) {
+      return (Array.isArray(errors) ? errors : []).slice(0, 5).map((e) => ({ type: typeof e?.type === "string" ? e.type.slice(0, 60) : null, message: typeof e?.message === "string" ? e.message.slice(0, 300) : null, path: Array.isArray(e?.path) ? e.path.slice(0, 5).map(String) : null }));
+    }
+    function classifyQueueErrors(list) {
+      const text = list.map((e) => (e.type || "") + " " + (e.message || "")).join(" | ");
+      if (list.some((e) => e.type === "FORBIDDEN") || /not accessible by integration|must have (?:write|push|admin)|permission|forbidden/i.test(text)) return "QUEUE_PERMISSION_DENIED";
+      if (/already (?:queued|enqueued|in (?:the )?merge queue)/i.test(text)) return "ALREADY_IN_MERGE_QUEUE";
+      if (/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text)) return "QUEUE_HEAD_MISMATCH";
+      return "QUEUE_REJECTED";
     }
     function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
@@ -554,11 +566,11 @@ var require_core = __commonJS({
           secrets.push(probeResponse.token);
           const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
           if (!exactRepos(probe, scope.installation)) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
-          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account) });
+          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(expectedRepos), permissions: permissions(account, operation) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
-          checkPermissions(tokenResponse.permissions, account);
+          checkPermissions(tokenResponse.permissions, account, "execution", operation);
           const repos = await api("/installation/repositories?per_page=100", token);
           if (!exactRepos(repos)) scopeMismatch("EXECUTION_REPOSITORY_SCOPE_MISMATCH", repos, expectedRepos);
           if (preflight?.kind === "owner_reference") {
@@ -571,6 +583,13 @@ var require_core = __commonJS({
           if (preflight?.kind === "enqueue") {
             const pr = await api(root + "/pulls/" + preflight.number, token);
             if (pr?.head?.sha !== preflight.sha || pr?.state !== "open" || pr?.draft || typeof pr.node_id !== "string") bad("STALE_OR_UNQUEUEABLE_HEAD");
+            preflight.nodeId = pr.node_id;
+            let before;
+            try {
+              before = (await api("/graphql", token, "POST", { query: QUEUE_STATE_QUERY, variables: { id: pr.node_id } }))?.data?.node;
+            } catch (_) {
+            }
+            if (before?.isInMergeQueue === true) throw new CoreError("ALREADY_IN_MERGE_QUEUE", "not_executed", void 0, { isInMergeQueue: true, mergeQueueEntry: before.mergeQueueEntry ? { id: before.mergeQueueEntry.id, state: before.mergeQueueEntry.state } : null });
             body = { query: "mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}", variables: { id: pr.node_id, head: preflight.sha } };
           }
           if (preflight?.kind === "review") {
@@ -601,11 +620,34 @@ var require_core = __commonJS({
               }
             }
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : await api(route, token, method, body);
-          if (operation === "enqueue_pull" && (result?.errors || !result?.data?.enqueuePullRequest?.mergeQueueEntry?.id)) throw new CoreError("QUEUE_RESULT_UNCONFIRMED", "unknown");
+          async function enqueue() {
+            let response, transport;
+            try {
+              response = await api(route, token, method, body);
+            } catch (e) {
+              if (!(e instanceof CoreError) || e.execution !== "unknown") throw e;
+              transport = e;
+            }
+            if (!transport && typeof response?.data?.enqueuePullRequest?.mergeQueueEntry?.id === "string" && !response.errors) return response;
+            const errors = graphqlErrors(response?.errors);
+            let after;
+            try {
+              after = (await api("/graphql", token, "POST", { query: QUEUE_STATE_QUERY, variables: { id: preflight.nodeId } }))?.data?.node;
+            } catch (_) {
+              after = void 0;
+            }
+            const state = typeof after?.isInMergeQueue === "boolean" ? { isInMergeQueue: after.isInMergeQueue, headRefOid: typeof after.headRefOid === "string" ? after.headRefOid : null, mergeQueueEntry: after.mergeQueueEntry ? { id: after.mergeQueueEntry.id, state: after.mergeQueueEntry.state } : null } : null;
+            if (state?.isInMergeQueue === true && state.headRefOid === preflight.sha) return { data: { enqueuePullRequest: { mergeQueueEntry: state.mergeQueueEntry } }, readback: state };
+            if (!state) throw new CoreError("QUEUE_RESULT_UNCONFIRMED", "unknown", transport?.status, { githubErrors: errors, readback: "unavailable" });
+            if (state.isInMergeQueue === true || state.headRefOid && state.headRefOid !== preflight.sha) throw new CoreError("QUEUE_HEAD_MISMATCH", "not_executed", void 0, { githubErrors: errors, readback: state });
+            if (transport) throw new CoreError("QUEUE_NOT_QUEUED_AFTER_UNKNOWN_WRITE", "not_executed", transport.status, { githubErrors: errors, readback: state });
+            if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
+            throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
+          }
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
-          return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
+          return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
         } finally {
           secrets.fill("");
         }
