@@ -363,3 +363,17 @@ test('#16 transport-unknown enqueue reads back once before deciding',async()=>{
  const blind=queueFixture({mutation:{status:502,data:{message:'bad gateway'}},after:new Error('down')});
  const b=await blind.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));assert.equal(b.errorCode,'QUEUE_RESULT_UNCONFIRMED');assert.equal(b.execution,'unknown');assert.equal(mutations(blind.calls).length,1);
 });
+test('#16 only QQ enqueue_pull requests a contents:write token; every other call keeps its scope',async()=>{
+ const tokenRequests=calls=>calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repository_ids).map(c=>c.parsed.permissions.contents);
+ const enq=queueFixture({mutation:{status:200,data:{data:{enqueuePullRequest:{mergeQueueEntry:{id:'MQ_w'}}}}}});
+ assert.equal((await enq.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'))).ok,true);assert.deepEqual(tokenRequests(enq.calls),['write']);
+ const qqOps=[['identity',{}],['get_pull',{number:7}],['list_rulesets',{}],['submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'ok'}],['dismiss_review',{number:7,review_id:4,message:'m'}]];
+ for(const [operation,args] of qqOps){const f=fixture({account:'qq'});await f.client.run(input(operation,args,'qq'));assert.deepEqual(tokenRequests(f.calls),['read'],operation);}
+ const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['read']);
+ const bb=fixture();await bb.client.run(input('get_pull',{number:7}));assert.deepEqual(tokenRequests(bb.calls),['write']);
+});
+test('#16 enqueue_pull refuses a token GitHub narrowed below contents:write before any GraphQL call',async()=>{
+ const f=fixture({account:'qq',override(path,init){if(path.endsWith('/access_tokens')&&JSON.parse(init.body).repository_ids)return {status:201,data:{token:'secret-token-narrow',expires_at:new Date(NOW+3600000).toISOString(),permissions:{contents:'read',issues:'write',pull_requests:'write',metadata:'read',administration:'write'}}};}});
+ const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
+ assert.equal(r.errorCode,'PERMISSION_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(f.calls.some(c=>c.path==='/graphql'),false);
+});
