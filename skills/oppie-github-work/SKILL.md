@@ -11,7 +11,7 @@ Select the account alias matching the acting teammate. The account parameter is 
 
 ## Repository configuration
 
-In the six-repository release, bb/cindy/deja/dd/gg/jj/rea/pg/video/vv use all six catalog repositories for installation and execution. QQ keeps six/six and its existing operation restrictions; ReviewInbox keeps six/two with read-only contents and COMMENT-only reviews. PG may have additional installation permissions, but ordinary execution tokens still contain only contents/write, issues/write, pull_requests/write and metadata/read. Installation grants do not permit management operations through this plugin. Confirm the installed version with identity before relying on these defaults.
+Since #22 the catalog has seven repositories: the original six plus the fork good-night-oppie/cindy. Every account's installation set is all seven. bb/cindy/deja execute on all seven with ordinary operations; DD executes on all seven but is COMMENT-only on cindy (no branches, files, PRs or issue edits there); QQ executes on all seven with its existing restrictions; gg/jj/rea/pg/video/vv execute on the original six only; ReviewInbox keeps two with read-only contents and COMMENT-only reviews. PG may have additional installation permissions, but ordinary execution tokens still contain only contents/write, issues/write, pull_requests/write and metadata/read. Installation grants do not permit management operations through this plugin. Confirm the installed version with identity before relying on these defaults.
 
 The settings-write UI is deferred. This release uses reviewed code configuration; there is no supported hot-save tool or page.
 
