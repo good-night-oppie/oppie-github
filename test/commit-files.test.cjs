@@ -5,11 +5,10 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
 const fs=require('node:fs');
-const os=require('node:os');
 const path=require('node:path');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
 const {CATALOG}=require('../node/repository-policy.cjs');
-const {gitBlobSha,readLocalFile,MAX_LOCAL_FILE_BYTES}=require('../node/commit-files.cjs');
+const {gitBlobSha}=require('../node/commit-files.cjs');
 const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
@@ -86,7 +85,7 @@ function fixture(options={}){
   return reply({message:'unexpected '+p},500);
  };
  let credentialsCalls=0;
- const client=createClient({credentials:async()=>{credentialsCalls++;return PEM;},fetch,now:()=>NOW,local:options.local});
+ const client=createClient({credentials:async()=>{credentialsCalls++;return PEM;},fetch,now:()=>NOW});
  return {git,head,calls,client,credentialsCalls:()=>credentialsCalls,writes:()=>calls.filter(c=>c.method!=='GET'&&c.path.includes('/git/'))};
 }
 const run=(f,args,account='deja')=>f.client.run({account,repo:'MontClip',operation:'commit_files',args});
@@ -120,43 +119,32 @@ test('several files, a delete, a rename and a gitlink land in exactly one fast-f
  assert.equal(r.receipt.url,'https://github.com/good-night-oppie/MontClip/commit/'+head);
 });
 
-test('a file larger than 2 MB uploads from a local file after its Git blob SHA is verified',async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'commit-files-'));
- try{
-  const big=crypto.randomBytes(3*1024*1024+17),file=path.join(dir,'big.bin');fs.writeFileSync(file,big);
-  const f=fixture();
-  const r=await run(f,base(f,{changes:[{path:'assets/big.bin',local_file:file,git_sha:gitBlobSha(big)}]}));
-  assert.equal(r.ok,true,JSON.stringify(r));
-  const files=f.git.flatten(f.git.commits.get(f.git.refs.get('feature/x')).tree.sha);
-  assert.ok(f.git.blobs.get(files['assets/big.bin'].sha).equals(big));
-  assert.ok(Buffer.byteLength(JSON.stringify({account:'deja',repo:'MontClip',operation:'commit_files',args:base(f,{changes:[{path:'assets/big.bin',local_file:file,git_sha:gitBlobSha(big)}]})}))<2048,'the request stays tiny');
-  // Wrong SHA: nothing uploaded, nothing visible.
-  const g=fixture();
-  const bad=await run(g,base(g,{changes:[{path:'assets/big.bin',local_file:file,git_sha:'0'.repeat(40)}]}));
-  assert.equal(bad.errorCode,'LOCAL_FILE_SHA_MISMATCH');assert.equal(bad.execution,'not_executed');
-  assert.equal(g.calls.some(c=>c.path.endsWith('/git/blobs')),false);assert.equal(g.git.refs.get('feature/x'),g.head);
- }finally{fs.rmSync(dir,{recursive:true,force:true});}
+test('a file larger than 2 MB already in the repository is committed by blob_sha with a tiny request',async()=>{
+ const seeded=seed();const big=crypto.randomBytes(3*1024*1024+17);const bigSha=seeded.git.putBlob(big);
+ const f=fixture({seeded});
+ const args=base(f,{changes:[{path:'assets/big.bin',blob_sha:bigSha},{path:'assets/big-copy.bin',blob_sha:bigSha,mode:'100755'}]});
+ assert.ok(Buffer.byteLength(JSON.stringify({account:'deja',repo:'MontClip',operation:'commit_files',args}))<2048,'the request stays tiny');
+ const r=await run(f,args);
+ assert.equal(r.ok,true,JSON.stringify(r));
+ const files=f.git.flatten(f.git.commits.get(f.git.refs.get('feature/x')).tree.sha);
+ assert.ok(f.git.blobs.get(files['assets/big.bin'].sha).equals(big));
+ assert.equal(files['assets/big-copy.bin'].mode,'100755');
+ assert.equal(f.calls.some(c=>c.path.endsWith('/git/blobs')),false,'no bytes are uploaded');
+ // A blob SHA that is not in the repository is refused by the tree step and writes nothing visible.
+ const g=fixture();
+ const missing=await run(g,base(g,{changes:[{path:'assets/none.bin',blob_sha:'7'.repeat(40)}]}));
+ assert.equal(missing.ok,false);assert.equal(missing.execution,'not_executed');assert.equal(g.git.refs.get('feature/x'),g.head);
 });
 
-test('local_file refuses symlinks, directories, oversized files and relative paths',async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'commit-files-'));
- try{
-  const real=path.join(dir,'real.txt');fs.writeFileSync(real,'x');
-  await assert.rejects(readLocalFile(dir),{code:'LOCAL_FILE_NOT_REGULAR'});
-  await assert.rejects(readLocalFile(real,0),{code:'LOCAL_FILE_TOO_LARGE'});
-  await assert.rejects(readLocalFile(path.join(dir,'missing')),{code:'LOCAL_FILE_UNAVAILABLE'});
-  let linked=false;try{fs.symlinkSync(real,path.join(dir,'link.txt'));linked=true;}catch(_){/* Windows without symlink privilege */}
-  if(linked)await assert.rejects(readLocalFile(path.join(dir,'link.txt')),{code:'LOCAL_FILE_NOT_REGULAR'});
-  const f=fixture();
-  const rel=await run(f,base(f,{changes:[{path:'a',local_file:'relative/a',git_sha:'a'.repeat(40)}]}));
-  assert.equal(rel.errorCode,'INVALID_LOCAL_FILE');assert.equal(f.credentialsCalls(),0);
-  const huge=fixture({local:{stat:async()=>({regular:true,size:MAX_LOCAL_FILE_BYTES+1}),read:async()=>assert.fail('must not read')}});
-  const r=await run(huge,base(huge,{changes:[{path:'a',local_file:real,git_sha:'a'.repeat(40)}]}));
-  assert.equal(r.errorCode,'LOCAL_FILE_TOO_LARGE');assert.equal(huge.writes().length,0);
-  const total=fixture({local:{stat:async()=>({regular:true,size:MAX_LOCAL_FILE_BYTES}),read:async()=>assert.fail('must not read')}});
-  const t=await run(total,base(total,{changes:[1,2,3,4,5].map(i=>({path:'f'+i,local_file:real,git_sha:'a'.repeat(40)}))}));
-  assert.equal(t.errorCode,'LOCAL_TOTAL_TOO_LARGE');assert.equal(total.writes().length,0);
- }finally{fs.rmSync(dir,{recursive:true,force:true});}
+test('local_file is disabled in this release and nothing local is read',async()=>{
+ const f=fixture();
+ for(const change of [{path:'a',local_file:path.join(__dirname,'commit-files.test.cjs'),git_sha:'a'.repeat(40)},{path:'a',local_file:'C:\\Users\\x\\.ssh\\id_rsa',git_sha:'a'.repeat(40)},{path:'a',local_file:'relative/a'}]){
+  const r=await run(f,base(f,{changes:[change]}));
+  assert.equal(r.errorCode,'LOCAL_FILE_DISABLED');assert.equal(r.execution,'not_executed');
+ }
+ assert.equal(f.credentialsCalls(),0);assert.equal(f.calls.length,0);
+ const source=fs.readFileSync(path.join(__dirname,'..','node','commit-files.cjs'),'utf8');
+ assert.equal(/require\('node:fs/.test(source),false,'commit_files has no file-system access');
 });
 
 test('the default branch is refused before any Git object is created',async()=>{
