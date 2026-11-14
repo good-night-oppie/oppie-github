@@ -5,7 +5,7 @@ const {validateEdits,applyEdits,MAX_FILE_BYTES}=require('./file-edit.cjs');
 const commitFilesModule=require('./commit-files.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
 const OWNER = 'good-night-oppie';
-const {initialPolicy,validatePolicy,reviewOnly}=require('./repository-policy.cjs');
+const {initialPolicy,validatePolicy,repositoryRestriction}=require('./repository-policy.cjs');
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
@@ -82,10 +82,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
     if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
-   // #22: DD only reviews code on the cindy fork: reads, issue comments and COMMENT reviews.
-   if(reviewOnly(account.account,repo)){
-    if(['create_branch','update_file','edit_file','commit_files','create_pull','update_pull','create_issue','update_issue'].includes(operation))bad('REVIEW_ONLY_REPOSITORY');
-    if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
+   // #22: on the cindy fork DD and QQ may only read and review; DD reviews are COMMENT only.
+   const restriction=repositoryRestriction(account.account,repo);
+   if(restriction){
+    if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
+    if(restriction.commentOnly&&operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
    const root='/repos/'+OWNER+'/'+repo;
    // Validate the entire operation before reading a private key or obtaining a token.
