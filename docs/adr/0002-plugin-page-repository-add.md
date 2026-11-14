@@ -78,7 +78,7 @@ The #23 rule ("only `cindy` may be absent") becomes two symmetric rules:
 - every catalog or overlay repository except the six required ones is optional in an installation, and
 - a repository that is installed but known to neither the catalog nor the overlay is accepted as pending, provided the listing is complete, the installation uses selected repositories, the entry belongs to `good-night-oppie`, its ID is unique and its name does not collide with a known name under a different ID. The number of pending repositories is bounded (proposed: 20).
 
-Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. This relaxes the exact installation-set check, so it needs QQ's decision (open question 2). Without it, step 1 still locks out every account, and only the configure-first order would be safe.
+Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. This relaxes the exact installation-set check, so it needs QQ's decision (open question 3). Without it, step 1 still locks out every account, and only the configure-first order would be safe.
 
 ### 4. Where the configuration lives, and how the owner's confirmation is trusted
 
