@@ -1,6 +1,6 @@
 # Add repositories from the Cindy plugin page without breaking App installations
 
-Status: proposed for QQ verification (issue #8, P1), revised after the owner's two decisions recorded on PR #24 (issuecomment-6875134659, 2026-11-14). Documentation only. No code, package, App installation, workflow or setting is changed by this document, and nothing in it may be implemented before QQ has verified it.
+Status: proposed for QQ verification (issue #8, P1), revised after the owner's decisions recorded on PR #24 (issuecomment-6875134659 and issuecomment-6875260329, 2026-11-14). Documentation only. No code, package, App installation, workflow or setting is changed by this document, and nothing in it may be implemented before QQ has verified it.
 
 Baseline: main `34079c6c6d5a64eb10cef00d09097897e4fa475c` (merge of #23, package `1.5.0-preview.8`). Related: [ADR 0001](0001-repository-scope-settings.md), issue #22 and PR #23 (optional `cindy` repository), the owner request recorded on #8 by Deja on 2026-11-14 ("the plugin can add new repositories in the Cindy plugin page"; for the plugin page and the App installation scope the owner chose "both together").
 
@@ -31,6 +31,7 @@ Checked in this session (2026-11-14):
 Inferred, not exercised in this session (each needs a real test before code relies on it):
 
 - GitHub only lets a user with administration rights on the installation change its selected repositories, through the GitHub settings page or user-to-server endpoints such as `PUT /user/installations/{installation_id}/repositories/{repository_id}`. An App JWT or installation token cannot change its own installation scope.
+- An installation token or App JWT can read `GET /repos/good-night-oppie/{name}` for a public repository that is not in its installation, and so obtain the numeric ID before the repository is installed. A private repository cannot be read this way.
 - `main.js` can call `cindy.confirm` when the request comes from the settings page rather than from a tool call (the documentation does not tie confirmation to a tool call; it requires a window to attach to).
 - The installed host version on each machine. QQ last checked 0.1.130; `minCindyVersion` is 0.1.126.
 
@@ -40,7 +41,7 @@ Inferred, not exercised in this session (each needs a real test before code reli
 
 | List | Changed by | Channel | Plugin role |
 | --- | --- | --- | --- |
-| App installation scope (12 Apps) | QQ, designated by the owner; which login QQ uses and whether each change needs a fresh owner confirmation are still open (open question 1) | GitHub App installation settings page | Read-only reconciliation |
+| App installation scope (12 Apps) | QQ, designated by the owner, working in the owner's signed-in browser (section 2) | Each App's Configure page on GitHub | Read-only reconciliation (`identity` after every App) |
 | Added-repository overlay (catalog entries and per-account grants for repositories added after the compiled baseline) | The owner | Plugin settings page, then host confirmation card, then Node conditional save (section 4) | Writes only after confirmation |
 | Compiled baseline (six required repositories, `cindy`, role tables, permissions) | Reviewed code PR | GitHub PR reviewed by QQ | Read-only |
 
@@ -48,23 +49,24 @@ The plugin never changes an App installation, never asks for a user token or per
 
 ### 2. Order of steps and intermediate states
 
-Adding a repository:
+Adding a repository follows a fixed order, agreed by QQ and the owner on 2026-11-14 after the incident in which most accounts were locked out:
 
-1. **Install first, in at least one App.** QQ adds the repository to one or more App installations on GitHub. With the change in section 3, accounts keep working: the new repository is reported as pending and is never put into a token.
-2. **Register on the plugin page.** The page lists repositories that are installed in at least one App but not configured, with the name and numeric ID read by the plugin from GitHub. The owner selects the repository and the accounts that should use it (section 5 limits the choice). The host confirmation card shows the account list, repository name and ID, and the old and new revision.
-3. **Install in the remaining Apps** in any order. Accounts granted the repository but not yet having it installed fail only that repository with `REPOSITORY_NOT_INSTALLED`, as in #23.
-4. **Read back.** The page runs a read-only `identity` for each affected account and shows which accounts are complete. The page does not report success from the save response alone.
+1. **Make the plugin compatible first.** Confirm that the installed plugin version supports the overlay on every machine whose teammates will use the repository (each machine keeps its own overlay, section 7), and that the name does not collide with a catalog or overlay entry.
+2. **The owner registers the repository on the plugin page and confirms the host card.** Node binds the repository ID (below) and checks the role limits in section 5. The card shows the accounts, repository name and ID, grants and the old and new revision. After the save, the repository is optional in every installation (section 3), so installing it can no longer lock an account out.
+3. **QQ changes the App installations, one App at a time,** on each App's Configure page in the owner's signed-in browser, using desktop control or the browser plugin. QQ records no password or token and does not use GoodNightOppie. The plugin takes no part in this step.
+4. **Read back after every App.** After each App, QQ runs the plugin's read-only `identity` for that account and checks that the repository appears in the installation with the registered ID, and in execution only when it is granted. QQ moves to the next App only after the read-back passes; a failed read-back stops the rollout. Nobody reports success from the save response alone.
 
-Configuring before installing is also safe (an overlay repository is optional in every installation), but it cannot bind a repository ID until some installation shows it, so step 1 must still happen before a grant is saved.
+Removing a repository goes the other way: revoke the grants on the plugin page first, with the host card (the next call stops minting tokens for it), then QQ removes it from the App installations in the same way, with an `identity` read-back after each App. Removal in the other order is also safe: the repository becomes `REPOSITORY_NOT_INSTALLED` for the affected accounts.
 
-Removing a repository goes the other way: revoke the grants on the plugin page first (the next call stops minting tokens for it), then QQ removes it from the App installations. Removal in the other order is also safe: the repository becomes `REPOSITORY_NOT_INSTALLED` for the affected accounts.
+Repository ID before installation: at step 2 no installation lists the repository yet, so the ID cannot come from an installation listing. Node reads it from GitHub repository metadata (`GET /repos/good-night-oppie/{name}`), which works for public repositories; for a repository Node cannot read, the owner enters the numeric ID shown on GitHub. Either way the card shows the name and ID, and the entry is saved as unverified. The first installation listing that contains the name verifies it. If the ID matches, the entry becomes verified. If it differs, only that repository is blocked (`REPOSITORY_ID_MISMATCH`, `not_executed`) and the page shows the conflict, because the unverified entry, not the installation, is in doubt. Once an entry is verified, a later listing with the same name and another ID fails the whole account closed, as today (open question 1).
 
 | State for one account and repository | Result |
 | --- | --- |
 | Installed, not in catalog or overlay | Other repositories work. `identity` adds `pendingRepositories` (name and ID only). Calls naming it fail with `REPOSITORY_NOT_ALLOWED` and `not_executed`. |
 | In overlay, granted, not installed | Only this repository fails with `REPOSITORY_NOT_INSTALLED` and `not_executed`. |
 | In overlay and installed, not granted to this account | `REPOSITORY_NOT_ALLOWED` and `not_executed`. |
-| Installed name matches a catalog or overlay name with a different ID | The whole account fails with `INSTALLATION_REPOSITORY_SCOPE_MISMATCH` (possible rename or re-creation; fail closed, as today). |
+| Overlay entry still unverified; installed with the same name and another ID | Only this repository fails with `REPOSITORY_ID_MISMATCH` and `not_executed`; the page shows the conflict. |
+| Installed name matches a catalog or verified overlay name with a different ID | The whole account fails with `INSTALLATION_REPOSITORY_SCOPE_MISMATCH` (possible rename or re-creation; fail closed, as today). |
 | Installation listing incomplete, duplicated or not owned by `good-night-oppie` | `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`, as today. |
 | Installation in "all repositories" mode | `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`; pending tolerance applies only to selected-repository installations. |
 | Required baseline repository missing | `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`, as today. |
@@ -78,7 +80,7 @@ The #23 rule ("only `cindy` may be absent") becomes two symmetric rules:
 - every catalog or overlay repository except the six required ones is optional in an installation, and
 - a repository that is installed but known to neither the catalog nor the overlay is accepted as pending, provided the listing is complete, the installation uses selected repositories, the entry belongs to `good-night-oppie`, its ID is unique and its name does not collide with a known name under a different ID. The number of pending repositories is bounded (proposed: 20).
 
-Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. This relaxes the exact installation-set check, so it needs QQ's decision (open question 2). Without it, step 1 still locks out every account, and only the configure-first order would be safe.
+Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. With the fixed order in section 2 (register before installing), the normal path does not need pending tolerance; it is a safety net for an installation changed out of order. It relaxes the exact installation-set check, so it needs QQ's decision (open question 2). Without it, an out-of-order installation locks that account out until the repository is registered.
 
 ### 4. Where the configuration lives, and how the owner's confirmation is trusted
 
@@ -87,10 +89,10 @@ The plugin page can show and edit configuration, but `/kv` cannot be the store o
 The decision:
 
 1. `settings.html` reads the current state through `main.js`, which asks Node with read-only RPCs (overlay, revision, per-account installation probe). `/kv` stores only page drafts and display preferences, never data Node trusts.
-2. The page sends a proposal (overlay diff and `expectedRevision`) over `BroadcastChannel` to `main.js`. `main.js` asks Node to validate it read-only. Node re-reads the installation listings, binds name and ID, checks the role limits in section 5 and returns a canonical summary and its SHA-256.
+2. The page sends a proposal (overlay diff and `expectedRevision`) over `BroadcastChannel` to `main.js`. `main.js` asks Node to validate it read-only. Node binds name and ID as described in section 2, checks for collisions and the role limits in section 5 and returns a canonical summary and its SHA-256.
 3. `main.js` calls `cindy.confirm({danger:true})` with that summary (accounts, repositories with IDs, grants added or removed, old and new revision). Only `confirmed === true` continues.
 4. `main.js` calls a Node save RPC that is not listed in the `ghost.json` tools, so neither the Agent nor `ghost_call` can reach it. Node re-validates the full proposal, compares the summary hash and `expectedRevision`, and writes atomically (temporary file and rename) into its private directory under `store.paths.root`, increasing the revision by exactly one.
-5. Node appends an audit record (section 6), then the page runs the read-back from step 4 of section 2.
+5. Node appends an audit record (section 6), then the page runs a read-only `identity` for the affected accounts. Installation read-backs follow in step 4 of section 2.
 
 Trust boundary (the same as QQ's option A on #8): this protects against forged page state, `/kv`, `BroadcastChannel`, Agent or `ghost_call` arguments, untrusted repository text and concurrent overwrites. It does not protect against a local process that already runs as the same operating-system user, because Node and `main.js` cannot prove to each other that a host click happened: the host gives the confirmation result only to `main.js`.
 
@@ -104,13 +106,13 @@ The overlay only adds repositories after the compiled baseline. It cannot:
 - change App permissions, requested token permissions, PG's execution-permission narrowing or any account's role;
 - grant more than the account's role allows for a new repository. Proposed limits: ordinary accounts may get ordinary operations or none; `dd` and `qq` get read and review operations only (as on `cindy`); `reviewinbox` gets nothing from the page; QQ-only operations (`admin_*`, rulesets, review dismissal, merge queue) are never extended to an overlay repository;
 - weaken default-branch refusal, fast-forward-only `commit_files`, `Assisted-by:`, COMMENT-only automatic review, the review queue's fixed repository list, or the rule that every write follows the user's task authorisation;
-- add a repository outside `good-night-oppie`, a repository without a GitHub-observed ID, or a repository to an account automatically. New repositories default to no grants; installing a repository never grants it.
+- add a repository outside `good-night-oppie`, a repository without a numeric ID shown on the confirmation card, or a repository to an account automatically. New repositories default to no grants; installing a repository never grants it.
 
 ### 6. Requirements from #8, item by item
 
 | #8 requirement | How this design meets it |
 | --- | --- |
-| Name and ID bound together | Overlay entries store name and ID observed in an installation listing at proposal time and checked again before the save; any later listing with the same name and another ID fails the account closed. |
+| Name and ID bound together | Overlay entries store the name and ID shown on the confirmation card (from GitHub metadata, or entered by the owner) and stay unverified until an installation listing shows the same pair. A mismatch before verification blocks only that repository; after verification, a listing with the same name and another ID fails the account closed. |
 | Installation separate from execution | Installation is checked against required, optional and pending repositories; execution is the explicit overlay grant set; `execution` stays a subset of `installation` minus pending repositories. |
 | Configuration snapshot and version | Node reads and freezes baseline plus overlay once per call before reading credentials; calls in flight keep their snapshot; the next call reads the new revision; receipts carry `scopeRevision`. |
 | Role boundaries | Section 5; role tables stay in code. |
@@ -124,7 +126,7 @@ The overlay only adds repositories after the compiled baseline. It cannot:
 - The `repo` parameter can no longer be a fixed enum. It becomes a bounded name string, checked against the snapshot (`REPOSITORY_NOT_ALLOWED`). `identity` and `github_accounts` report the configured repositories so teammates can discover them.
 - The overlay is per machine. Win11 and `europa-aws` each keep their own file and can differ until both are configured, which is the same situation as package versions today.
 - Repository names added through the page appear only in the local overlay and audit file, not in this public repository.
-- Tests needed before release: pending repositories never reach a token; optional overlay repositories; ID collision; "all repositories" installation; incomplete listing; snapshot consistency across a concurrent save; stale revision; restoring an older file; malformed overlay falling back to baseline; role limits per account; the save RPC unreachable through `ghost_call`; audit redaction; and a real save and read-back on the Cindy plugin page.
+- Tests needed before release: pending repositories never reach a token; optional overlay repositories; ID collision; unverified ID mismatch blocking only that repository; "all repositories" installation; incomplete listing; snapshot consistency across a concurrent save; stale revision; restoring an older file; malformed overlay falling back to baseline; role limits per account; the save RPC unreachable through `ghost_call`; audit redaction; and a real save and read-back on the Cindy plugin page.
 
 ## Decided by the owner (2026-11-14)
 
@@ -133,14 +135,17 @@ Recorded by Deja on PR #24 (issuecomment-6875134659):
 - Adding and revoking access both need only the host confirmation card; no GitHub nonce comment.
 - QQ changes the installation scope of the twelve Apps in the GitHub App installation settings.
 
+Recorded by Deja on PR #24 (issuecomment-6875260329), as relayed by QQ after confirming with the owner in person:
+
+- QQ works in the owner's signed-in browser, on each App's Configure page, using desktop control or the browser plugin. No password or token is recorded and GoodNightOppie is not used.
+- After each App is changed, QQ checks it with the plugin's `identity` read-back.
+- The order is fixed: plugin compatible with the new repository first, then the owner's confirmation card, then the App changes.
+
 ## Open questions
-
-For QQ to confirm with the owner:
-
-1. Which GitHub login QQ uses to change App installation scopes, and whether each change needs a fresh owner confirmation. Changing installation repositories normally needs an administrator login for the organisation or account (inferred, not tested); Deja reports that the GoodNightOppie token is currently invalid. The plugin takes no part in this step either way.
 
 For QQ:
 
+1. How the repository ID is bound before installation (section 2): metadata lookup for public repositories and an owner-entered ID otherwise, saved as unverified, with a mismatch before verification blocking only that repository.
 2. Whether pending tolerance (section 3) is acceptable, including the bound of 20 and the requirement for selected-repository installations.
 3. The default role limits for overlay repositories in section 5, especially `dd`, `qq` and `reviewinbox`.
 4. Replacing the `repo` enum with a validated string, and whether `github_review_queue` stays on its fixed list.
