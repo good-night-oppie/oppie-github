@@ -6,13 +6,17 @@ const SIX=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339,'montcl
 const CATALOG=Object.freeze({...SIX,cindy:1457433299});
 const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
 const TWO=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339});
-// #22: execution on cindy only for the accounts named for that work. Implementation candidates
-// (bb/cindy/deja) keep their ordinary operations; DD reviews only (COMMENT); QQ keeps its existing
-// restrictions. Everyone else stays on the original six until QQ/the owner decide otherwise.
-const CINDY_EXECUTION=Object.freeze(['bb','cindy','deja','dd','qq']);
-// Repositories where an account may read, comment and submit COMMENT reviews but not author.
-const REVIEW_ONLY=Object.freeze({dd:Object.freeze(['cindy'])});
-function reviewOnly(account,repo){return Object.hasOwn(REVIEW_ONLY,account)&&REVIEW_ONLY[account].includes(repo);}
+// #22 (QQ review): roles on the cindy fork. bb/deja write (branches, files, PRs); dd reads and
+// posts COMMENT reviews only; qq uses review operations only (no admin, ruleset, dismissal or
+// merge queue). Every other account is left out of cindy execution until a separate small PR.
+const CINDY_ROLES=Object.freeze({bb:'write',deja:'write',dd:'comment_review',qq:'review'});
+const CINDY_EXECUTION=Object.freeze(Object.keys(CINDY_ROLES));
+const REVIEW_OPERATIONS=Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review']);
+// Per-repository operation allowlist on top of the account's existing role; null means unchanged.
+function repositoryRestriction(account,repo){
+ if(repo!=='cindy'||!Object.hasOwn(CINDY_ROLES,account)||CINDY_ROLES[account]==='write')return null;
+ return Object.freeze({operations:REVIEW_OPERATIONS,commentOnly:CINDY_ROLES[account]==='comment_review'});
+}
 function invalid(){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';throw e;}
 function record(value,keys){
  if(!value||typeof value!=='object'||Array.isArray(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))invalid();
@@ -47,4 +51,4 @@ function validatePolicy(value){
  return Object.freeze({schemaVersion:1,revision:value.revision,accounts:Object.freeze(accounts)});
 }
 function initialPolicy(){return validatePolicy({schemaVersion:1,revision:0,accounts:Object.fromEntries(ACCOUNT_NAMES.map(a=>[a,baseline(a)]))});}
-module.exports={CATALOG,SIX,TWO,CINDY_EXECUTION,REVIEW_ONLY,reviewOnly,ACCOUNT_NAMES,initialPolicy,validatePolicy};
+module.exports={CATALOG,SIX,TWO,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};
