@@ -8,11 +8,13 @@ Use a fixed, reviewed catalog of repositories belonging to good-night-oppie. Ver
 
 | Account | Installation | Execution | Existing operation boundary |
 | --- | --- | --- | --- |
-| bb, cindy, deja, dd, gg, jj, rea, pg, video, vv | Six | Six | Ordinary account operations; no administration |
-| qq | Six | Six | Existing QQ_ALLOWED / QQ_ONLY rules and contents:read |
-| reviewinbox | Six | Two | contents:read and COMMENT-only reviews |
+| bb, cindy, deja | Seven | Seven | Ordinary account operations; no administration |
+| dd | Seven | Seven | Ordinary operations on the six; on cindy only reads, issue comments and COMMENT reviews |
+| gg, jj, rea, pg, video, vv | Seven | Six | Ordinary account operations; no administration |
+| qq | Seven | Seven | Existing QQ_ALLOWED / QQ_ONLY rules and contents:read |
+| reviewinbox | Seven | Two | contents:read and COMMENT-only reviews |
 
-Six means MontClip/1441621868, MontClip-Cindy/1446532339, montclip-rsi/1450602468, rsi-playbooks/1450603260, oppie-github/1451885379 and sglang-review-inbox/1451900929. Two means MontClip and MontClip-Cindy.
+Six means MontClip/1441621868, MontClip-Cindy/1446532339, montclip-rsi/1450602468, rsi-playbooks/1450603260, oppie-github/1451885379 and sglang-review-inbox/1451900929. Seven adds cindy/1457433299, the fork good-night-oppie/cindy (#22). Two means MontClip and MontClip-Cindy. Which accounts execute on cindy follows the owner's instruction on #19 (DD only reviews code; PG, Deja and BB configure the fork) and is pending QQ review; accounts not named stay on six until QQ or the owner decide.
 
 The account grants above include the subsequent Video/VV authorization recorded in issue #8 and supersede the initial Deja-only candidate. Repository access does not override a teammate's task authorization or restrictions on comments, reviews, approvals or merges.
 
