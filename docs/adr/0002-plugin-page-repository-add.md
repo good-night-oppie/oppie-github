@@ -1,6 +1,6 @@
 # Add repositories from the Cindy plugin page without breaking App installations
 
-Status: proposed for QQ verification (issue #8, P1). Documentation only. No code, package, App installation, workflow or setting is changed by this document, and nothing in it may be implemented before QQ has verified it.
+Status: proposed for QQ verification (issue #8, P1), revised after the owner's two decisions recorded on PR #24 (issuecomment-6875134659, 2026-11-14). Documentation only. No code, package, App installation, workflow or setting is changed by this document, and nothing in it may be implemented before QQ has verified it.
 
 Baseline: main `34079c6c6d5a64eb10cef00d09097897e4fa475c` (merge of #23, package `1.5.0-preview.8`). Related: [ADR 0001](0001-repository-scope-settings.md), issue #22 and PR #23 (optional `cindy` repository), the owner request recorded on #8 by Deja on 2026-11-14 ("the plugin can add new repositories in the Cindy plugin page"; for the plugin page and the App installation scope the owner chose "both together").
 
@@ -40,7 +40,7 @@ Inferred, not exercised in this session (each needs a real test before code reli
 
 | List | Changed by | Channel | Plugin role |
 | --- | --- | --- | --- |
-| App installation scope (12 Apps) | The owner (or a person the owner names, acting under the owner's own GitHub login) | GitHub App installation settings page | Read-only reconciliation |
+| App installation scope (12 Apps) | QQ, designated by the owner; which login QQ uses and whether each change needs a fresh owner confirmation are still open (open question 1) | GitHub App installation settings page | Read-only reconciliation |
 | Added-repository overlay (catalog entries and per-account grants for repositories added after the compiled baseline) | The owner | Plugin settings page, then host confirmation card, then Node conditional save (section 4) | Writes only after confirmation |
 | Compiled baseline (six required repositories, `cindy`, role tables, permissions) | Reviewed code PR | GitHub PR reviewed by QQ | Read-only |
 
@@ -50,14 +50,14 @@ The plugin never changes an App installation, never asks for a user token or per
 
 Adding a repository:
 
-1. **Install first, in at least one App.** The owner adds the repository to one or more App installations on GitHub. With the change in section 3, accounts keep working: the new repository is reported as pending and is never put into a token.
+1. **Install first, in at least one App.** QQ adds the repository to one or more App installations on GitHub. With the change in section 3, accounts keep working: the new repository is reported as pending and is never put into a token.
 2. **Register on the plugin page.** The page lists repositories that are installed in at least one App but not configured, with the name and numeric ID read by the plugin from GitHub. The owner selects the repository and the accounts that should use it (section 5 limits the choice). The host confirmation card shows the account list, repository name and ID, and the old and new revision.
 3. **Install in the remaining Apps** in any order. Accounts granted the repository but not yet having it installed fail only that repository with `REPOSITORY_NOT_INSTALLED`, as in #23.
 4. **Read back.** The page runs a read-only `identity` for each affected account and shows which accounts are complete. The page does not report success from the save response alone.
 
 Configuring before installing is also safe (an overlay repository is optional in every installation), but it cannot bind a repository ID until some installation shows it, so step 1 must still happen before a grant is saved.
 
-Removing a repository goes the other way: revoke the grants on the plugin page first (the next call stops minting tokens for it), then the owner removes it from the App installations. Removal in the other order is also safe: the repository becomes `REPOSITORY_NOT_INSTALLED` for the affected accounts.
+Removing a repository goes the other way: revoke the grants on the plugin page first (the next call stops minting tokens for it), then QQ removes it from the App installations. Removal in the other order is also safe: the repository becomes `REPOSITORY_NOT_INSTALLED` for the affected accounts.
 
 | State for one account and repository | Result |
 | --- | --- |
@@ -78,7 +78,7 @@ The #23 rule ("only `cindy` may be absent") becomes two symmetric rules:
 - every catalog or overlay repository except the six required ones is optional in an installation, and
 - a repository that is installed but known to neither the catalog nor the overlay is accepted as pending, provided the listing is complete, the installation uses selected repositories, the entry belongs to `good-night-oppie`, its ID is unique and its name does not collide with a known name under a different ID. The number of pending repositories is bounded (proposed: 20).
 
-Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. This relaxes the exact installation-set check, so it needs QQ's decision (open question 3). Without it, step 1 still locks out every account, and only the configure-first order would be safe.
+Pending repositories are never included in `repository_ids`, and the exact execution-token check remains unchanged, so a pending repository cannot reach a token. This relaxes the exact installation-set check, so it needs QQ's decision (open question 2). Without it, step 1 still locks out every account, and only the configure-first order would be safe.
 
 ### 4. Where the configuration lives, and how the owner's confirmation is trusted
 
@@ -94,7 +94,7 @@ The decision:
 
 Trust boundary (the same as QQ's option A on #8): this protects against forged page state, `/kv`, `BroadcastChannel`, Agent or `ghost_call` arguments, untrusted repository text and concurrent overwrites. It does not protect against a local process that already runs as the same operating-system user, because Node and `main.js` cannot prove to each other that a host click happened: the host gives the confirmation result only to `main.js`.
 
-Expanding access is the risky direction, so for adding a repository or a grant, the save also requires QQ's existing owner-proof path: an owner comment by `EdwardTang` (ID 3278807) within 24 hours containing an exact line with a one-use nonce and the SHA-256 of the canonical proposal, verified by Node and consumed before the write (`node/owner-authorization.cjs`). Narrowing (revoking a grant or removing an overlay repository) needs only the confirmation card. Whether expansion needs the owner comment is the owner's choice (open question 1); without it, the boundary above is the whole protection. A host-minted confirmation receipt delivered to Node would remove this trade-off, but it would be a Cindy change outside this repository.
+Owner decision (2026-11-14): a real click on the host confirmation card is sufficient for both adding and revoking access. No GitHub owner comment or nonce is required, and the `ruleset_update` owner-proof path is not reused here. The trust boundary above is therefore the whole protection for page saves: a process already running as the same operating-system user is out of scope. The card text must show every account, repository name and ID, grant added or removed, and the old and new revision, so that the click approves exactly what is saved. The host limits the card body to 300 characters; a proposal whose summary does not fit is refused (`CONFIRMATION_TOO_LARGE`, as `main.js` already does for `ruleset_update`) and must be split into smaller saves, never abbreviated. A host-minted confirmation receipt delivered to Node would close the remaining gap, but it would be a Cindy change outside this repository (open question 6).
 
 ### 5. Limits the plugin page cannot bypass
 
@@ -116,7 +116,7 @@ The overlay only adds repositories after the compiled baseline. It cannot:
 | Role boundaries | Section 5; role tables stay in code. |
 | No token caching | Unchanged: fresh tokens every call; tokens and keys never go to the page, `/kv`, `BroadcastChannel`, logs or audit records. |
 | Concurrent saves and version rollback | Compare-and-set on `expectedRevision`; revisions only increase; the highest revision seen is recorded beside the file, so restoring an older file is rejected; a rollback is a new revision with old content, made through the same confirmation. |
-| Redacted audit records | Append-only JSON lines in Node's private directory: time, revision before and after, accounts, repository names and IDs added or removed, confirmation path (card only, or card plus owner comment URL), proposal hash. No tokens, keys, local paths or GitHub response bodies. |
+| Redacted audit records | Append-only JSON lines in Node's private directory: time, revision before and after, accounts, repository names and IDs added or removed, that the host confirmation card was confirmed, proposal hash. No tokens, keys, local paths or GitHub response bodies. |
 | No CI, dependency, network or monitoring changes | Uses existing `api.github.com` calls and host capabilities already declared (`confirm`, settings page, Node worker). |
 
 ### 7. Consequences
@@ -126,19 +126,25 @@ The overlay only adds repositories after the compiled baseline. It cannot:
 - Repository names added through the page appear only in the local overlay and audit file, not in this public repository.
 - Tests needed before release: pending repositories never reach a token; optional overlay repositories; ID collision; "all repositories" installation; incomplete listing; snapshot consistency across a concurrent save; stale revision; restoring an older file; malformed overlay falling back to baseline; role limits per account; the save RPC unreachable through `ghost_call`; audit redaction; and a real save and read-back on the Cindy plugin page.
 
+## Decided by the owner (2026-11-14)
+
+Recorded by Deja on PR #24 (issuecomment-6875134659):
+
+- Adding and revoking access both need only the host confirmation card; no GitHub nonce comment.
+- QQ changes the installation scope of the twelve Apps in the GitHub App installation settings.
+
 ## Open questions
 
-For the owner:
+For QQ to confirm with the owner:
 
-1. Confirmation strength for adding access: confirmation card only (simpler; trusts the local machine), or confirmation card plus a GitHub owner comment with nonce and proposal hash (proposed; Node can verify it independently). Revoking access uses the card only either way.
-2. Who edits the twelve App installations when a repository is added: the owner alone, or a named teammate under the owner's login, as DD did for `cindy`.
+1. Which GitHub login QQ uses to change App installation scopes, and whether each change needs a fresh owner confirmation. Changing installation repositories normally needs an administrator login for the organisation or account (inferred, not tested); Deja reports that the GoodNightOppie token is currently invalid. The plugin takes no part in this step either way.
 
 For QQ:
 
-3. Whether pending tolerance (section 3) is acceptable, including the bound of 20 and the requirement for selected-repository installations.
-4. The default role limits for overlay repositories in section 5, especially `dd`, `qq` and `reviewinbox`.
-5. Replacing the `repo` enum with a validated string, and whether `github_review_queue` stays on its fixed list.
-6. Whether the overlay should stay per machine or be synchronised, and how.
-7. Whether to request a host-minted confirmation receipt for Node from Cindy, which would remove the need for the owner comment.
+2. Whether pending tolerance (section 3) is acceptable, including the bound of 20 and the requirement for selected-repository installations.
+3. The default role limits for overlay repositories in section 5, especially `dd`, `qq` and `reviewinbox`.
+4. Replacing the `repo` enum with a validated string, and whether `github_review_queue` stays on its fixed list.
+5. Whether the overlay should stay per machine or be synchronised, and how.
+6. Whether to request a host-minted confirmation receipt for Node from Cindy, to close the same-user local-process gap left by card-only confirmation.
 
 No implementation starts until QQ has verified this ADR on its pull request.
