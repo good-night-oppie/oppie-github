@@ -54,6 +54,10 @@ The serialized operation object (including account, repo, operation and args) mu
 
 REQUEST_TOO_LARGE and PATCH_CONFLICT mean no GitHub write occurred. A changed baseline fails without overwriting it. If the execution status is unknown, read back the exact branch/path before deciding whether to retry. An outer tool ok:true is not write success: inspect the inner ok/errorCode/execution fields. Error messages never forward raw host diagnostics.
 
+## Multi-file commits
+
+`commit_files` writes one commit with many changes (inline content, existing blobs by `blob_sha` including large files, renames, deletes, gitlinks; `local_file` is disabled with `LOCAL_FILE_DISABLED`) through the Git Data API. `expected_head` must equal the live branch head (`null` creates a new branch from `parent`); updates are fast-forward only and force is never allowed (QQ decision on #19; a non-fast-forward fails with `NOT_FAST_FORWARD`); `merge_parent` creates a merge commit that keeps the branch head as first parent, e.g. to bring a new main into a feature branch; it does not bring in main's changes by itself, so `changes` must contain them and the first-parent diff should be checked against main. The default branch is refused, the message must contain `Assisted-by:`, failures before the ref update are not_executed, and an uncertain ref update is read back once and never retried. Details: docs/commit-files.md.
+
 ## Commit identity for bot accounts
 
 GitHub links a commit to an account by the **author email** stored in the commit, not by who pushed it. A bare `<handle>@users.noreply.github.com` binds the commit to whoever owns that handle as a person (`bb@users.noreply.github.com` once bound a real stranger), and a `[bot]` address with the wrong numeric prefix stays unattributed and trips `unattributed_changes` rules. The GitHub **App ID is not the bot user ID**.

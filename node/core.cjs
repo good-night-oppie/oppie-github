@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const {validateProof}=require('./owner-authorization.cjs');
 const {validateEdits,applyEdits,MAX_FILE_BYTES}=require('./file-edit.cjs');
+const commitFilesModule=require('./commit-files.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
 const OWNER = 'good-night-oppie';
 const {initialPolicy,validatePolicy}=require('./repository-policy.cjs');
@@ -19,7 +20,7 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
  allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'})])));
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
-const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','admin_get','admin_update',...QQ_ONLY]);
+const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','commit_files','admin_get','admin_update',...QQ_ONLY]);
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
@@ -77,7 +78,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
    const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
    if(account.account==='reviewinbox'){
-    if(['create_branch','update_file','edit_file'].includes(operation))bad('READ_ONLY_CONTENTS');
+    if(['create_branch','update_file','edit_file','commit_files'].includes(operation))bad('READ_ONLY_CONTENTS');
     if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
     if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
@@ -115,6 +116,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      body={message:args.message,branch:args.branch,sha:args.expected_sha.toLowerCase()};method='PUT';route=root+'/contents/'+filePath(args.path);
      preflight={kind:'edit',branch:args.branch,sha:body.sha,path:args.path,editArgs:{...args,expected_sha:body.sha,expected_result_sha256:args.expected_result_sha256.toLowerCase()}};break;
     }
+    case 'commit_files':{
+     // #19: validated completely before credentials; see node/commit-files.cjs.
+     const plan=commitFilesModule.validateCommitFiles(args,{bad,exact,nonempty,sha,ref,filePath});
+     preflight={kind:'commit',branch:plan.branch,plan};break;
+    }
     case 'list_rulesets':exact(args,[]);route=root+'/rulesets?includes_parents=true';break;
     case 'get_ruleset':exact(args,['ruleset_id']);route=root+'/rulesets/'+positive(args.ruleset_id);break;
     case 'ruleset_update':{
@@ -129,10 +135,10 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'admin_get':exact(args,[]);if(!account.admin)bad('ADMIN_ACCOUNT_REQUIRED');route=root;break;
     case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!account.admin)bad('ADMIN_ACCOUNT_REQUIRED');if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();method='PATCH';route=root;body={...args};break;
    }
-   async function api(path,token,method='GET',payload,maxResponseBytes=2500000){
+   async function api(path,token,method='GET',payload,maxResponseBytes=2500000,timeoutMs=30000){
     if(!path.startsWith('/')||path.startsWith('//')||/[\r\n\\]/.test(path))bad('INVALID_API_ROUTE');
     let response;
-    try{response=await fetcher('https://api.github.com'+path,{method,headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'oppie-github-agent-plugin',Authorization:'Bearer '+token,...(payload?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(30000),...(payload?{body:JSON.stringify(payload)}:{})});}
+    try{response=await fetcher('https://api.github.com'+path,{method,headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'oppie-github-agent-plugin',Authorization:'Bearer '+token,...(payload?{'Content-Type':'application/json'}:{})},redirect:'error',signal:AbortSignal.timeout(timeoutMs),...(payload?{body:JSON.stringify(payload)}:{})});}
     catch(_){throw new CoreError(method==='GET'?'NETWORK_ERROR':'WRITE_OUTCOME_UNKNOWN',method==='GET'?'not_executed':'unknown');}
     if(response.status>=300&&response.status<400)throw new CoreError('REDIRECT_REFUSED',method==='GET'?'not_executed':'unknown',response.status);
     if(!response.ok)throw new CoreError('GITHUB_HTTP_'+response.status,method!=='GET'&&response.status>=500?'unknown':'not_executed',response.status);
@@ -182,7 +188,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(before?.isInMergeQueue===true)throw new CoreError('ALREADY_IN_MERGE_QUEUE','not_executed',undefined,{isInMergeQueue:true,mergeQueueEntry:before.mergeQueueEntry?{id:before.mergeQueueEntry.id,state:before.mergeQueueEntry.state}:null});
     body={query:'mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}',variables:{id:pr.node_id,head:preflight.sha}};}
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
-   if(preflight?.kind==='branch'||preflight?.kind==='file'||preflight?.kind==='edit'){
+   if(['branch','file','edit','commit'].includes(preflight?.kind)){
     const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(['file','edit'].includes(preflight.kind)){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');if(preflight.kind==='edit'){
       // Reject stale/oversized metadata before spending a blob request.
@@ -213,7 +219,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
