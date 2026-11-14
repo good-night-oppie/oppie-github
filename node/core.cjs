@@ -191,7 +191,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    // Without the optional repository installed, other repositories keep working and the optional
    // one fails on its own before any execution token is minted.
    const effectiveRepos=Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n])=>!OPTIONAL_REPOSITORIES.includes(n)||optionalPresent.includes(n))));
-   if(!Object.hasOwn(effectiveRepos,repo))bad('OPTIONAL_REPOSITORY_NOT_INSTALLED');
+   if(!Object.hasOwn(effectiveRepos,repo))bad('REPOSITORY_NOT_INSTALLED');
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(effectiveRepos),permissions:permissions(account,operation)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account,'execution',operation);

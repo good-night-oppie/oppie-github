@@ -207,11 +207,33 @@ for(const [account,execution] of Object.entries(DESIGN)){
 for(const account of Object.keys(DESIGN).filter(a=>Object.hasOwn(DESIGN[a],'cindy')))test(account+' without cindy installed: cindy fails on its own and the other repositories keep working',async()=>{
  for(const [operation,args] of [['identity',{}],['get_issue',{number:1}]]){
   const f=fixture(account,{installed:rows(SIX)}),r=await run(f,account,operation,args);
-  assert.equal(r.errorCode,'OPTIONAL_REPOSITORY_NOT_INSTALLED',operation);assert.equal(r.execution,'not_executed');
+  assert.equal(r.errorCode,'REPOSITORY_NOT_INSTALLED',operation);assert.equal(r.execution,'not_executed');
   assert.equal(tokens(f).length,1,'no execution token is minted');assert.equal(writes(f).length,0);
  }
  for(const repo of Object.keys(SIX).filter(r=>Object.hasOwn(DESIGN[account],r))){
   const f=fixture(account,{installed:rows(SIX)}),r=await run(f,account,'get_issue',{number:1},repo);
   assert.equal(r.ok,true,repo+': '+r.errorCode);
  }
+});
+
+// 11. QQ (#23): every account across the three installation states.
+const STRANGER={id:99,name:'other',full_name:'good-night-oppie/other'};
+const ROLE_PROBE={bb:['create_branch',{branch:'agy/x',sha:SHA},null],deja:['create_branch',{branch:'agy/x',sha:SHA},null],dd:['create_branch',{branch:'agy/x',sha:SHA},'REVIEW_ONLY_REPOSITORY'],qq:['enqueue_pull',{number:7,commit_id:SHA},'REVIEW_ONLY_REPOSITORY']};
+for(const [account,execution] of Object.entries(DESIGN))test(account+' across six, six+cindy and six+stranger installations',async()=>{
+ // Six repositories: existing operations work on every original execution repository; cindy is not installed.
+ for(const repo of Object.keys(execution).filter(r=>r!=='cindy')){
+  const f=fixture(account,{installed:rows(SIX)}),r=await run(f,account,'get_issue',{number:1},repo);assert.equal(r.ok,true,'six '+repo+': '+r.errorCode);
+ }
+ const six=fixture(account,{installed:rows(SIX)}),c6=await run(six,account,'get_issue',{number:1});
+ assert.equal(c6.errorCode,Object.hasOwn(execution,'cindy')?'REPOSITORY_NOT_INSTALLED':'REPOSITORY_NOT_ALLOWED');assert.equal(c6.execution,'not_executed');
+ // Six plus cindy: the role table applies on cindy.
+ const seven=fixture(account,{installed:rows(SEVEN)});
+ if(Object.hasOwn(ROLE_PROBE,account)){
+  const [operation,args,code]=ROLE_PROBE[account],r=await run(seven,account,operation,args);
+  if(code)assert.equal(r.errorCode,code);else{assert.equal(r.ok,true,r.errorCode);assert.equal(writes(seven).length,1);}
+ }else assert.equal((await run(seven,account,'get_issue',{number:1})).errorCode,'REPOSITORY_NOT_ALLOWED');
+ // Six plus an unknown repository: still a mismatch, before any execution token.
+ const odd=rows(SIX);odd.repositories.push(STRANGER);odd.total_count++;
+ const f=fixture(account,{installed:odd}),r=await run(f,account,'identity',{},Object.keys(execution)[0]);
+ assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(tokens(f).length,1);
 });

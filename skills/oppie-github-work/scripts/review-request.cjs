@@ -787,7 +787,7 @@ var require_core = __commonJS({
           const optionalPresent = installedOptional(probe, scope.installation);
           if (optionalPresent === null) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
           const effectiveRepos = Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n]) => !OPTIONAL_REPOSITORIES.includes(n) || optionalPresent.includes(n))));
-          if (!Object.hasOwn(effectiveRepos, repo)) bad("OPTIONAL_REPOSITORY_NOT_INSTALLED");
+          if (!Object.hasOwn(effectiveRepos, repo)) bad("REPOSITORY_NOT_INSTALLED");
           const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(effectiveRepos), permissions: permissions(account, operation) });
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;

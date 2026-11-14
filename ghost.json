@@ -243,6 +243,6 @@
       }
     ]
   },
-  "releaseNotes": "候选（#22，按 QQ 审查）：repo 枚举加入 fork good-night-oppie/cindy，作为可选安装仓：App 安装里有没有 cindy 都能用；多出其他仓或缺少必须的仓仍报不匹配；没装 cindy 时只有 cindy 的操作报 OPTIONAL_REPOSITORY_NOT_INSTALLED。cindy 上：bb/deja 可写分支、文件和 PR；DD 只读，评审仅 COMMENT；QQ 只用审查类操作；其余账号不列入。review queue 不含 cindy，App 权限不变。",
+  "releaseNotes": "候选（#22，按 QQ 审查）：repo 枚举加入 fork good-night-oppie/cindy，作为可选安装仓：App 安装里有没有 cindy 都能用；多出其他仓或缺少必须的仓仍报不匹配；没装 cindy 时只有 cindy 的操作报 REPOSITORY_NOT_INSTALLED。cindy 上：bb/deja 可写分支、文件和 PR；DD 只读，评审仅 COMMENT；QQ 只用审查类操作；其余账号不列入。review queue 不含 cindy，App 权限不变。",
   "confirm": true
 }
