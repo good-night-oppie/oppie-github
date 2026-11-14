@@ -278,9 +278,15 @@ var require_commit_files = __commonJS({
 var require_repository_policy = __commonJS({
   "node/repository-policy.cjs"(exports2, module2) {
     "use strict";
-    var CATALOG = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
+    var SIX = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
+    var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
     var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
+    var CINDY_EXECUTION = Object.freeze(["bb", "cindy", "deja", "dd", "qq"]);
+    var REVIEW_ONLY = Object.freeze({ dd: Object.freeze(["cindy"]) });
+    function reviewOnly(account, repo) {
+      return Object.hasOwn(REVIEW_ONLY, account) && REVIEW_ONLY[account].includes(repo);
+    }
     function invalid() {
       const e = new Error("INVALID_SCOPE_CONFIGURATION");
       e.code = "INVALID_SCOPE_CONFIGURATION";
@@ -294,7 +300,7 @@ var require_repository_policy = __commonJS({
     function repoMap(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
       const names = Object.keys(value);
-      if (!names.length || names.length > 6) invalid();
+      if (!names.length || names.length > Object.keys(CATALOG).length) invalid();
       record(value, names);
       const selected = {};
       for (const name of Object.keys(CATALOG)) if (Object.hasOwn(value, name)) {
@@ -305,7 +311,7 @@ var require_repository_policy = __commonJS({
       return Object.freeze(selected);
     }
     function baseline(account) {
-      return { installation: CATALOG, execution: account === "reviewinbox" ? TWO : CATALOG };
+      return { installation: CATALOG, execution: account === "reviewinbox" ? TWO : CINDY_EXECUTION.includes(account) ? CATALOG : SIX };
     }
     function sameMap(a, b) {
       return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
@@ -329,7 +335,7 @@ var require_repository_policy = __commonJS({
     function initialPolicy() {
       return validatePolicy({ schemaVersion: 1, revision: 0, accounts: Object.fromEntries(ACCOUNT_NAMES.map((a) => [a, baseline(a)])) });
     }
-    module2.exports = { CATALOG, ACCOUNT_NAMES, initialPolicy, validatePolicy };
+    module2.exports = { CATALOG, SIX, TWO, CINDY_EXECUTION, REVIEW_ONLY, reviewOnly, ACCOUNT_NAMES, initialPolicy, validatePolicy };
   }
 });
 
@@ -343,7 +349,7 @@ var require_core = __commonJS({
     var commitFilesModule = require_commit_files();
     var MAX_OPERATION_BYTES = 261120;
     var OWNER = "good-night-oppie";
-    var { initialPolicy, validatePolicy } = require_repository_policy();
+    var { initialPolicy, validatePolicy, reviewOnly } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
@@ -521,6 +527,10 @@ var require_core = __commonJS({
           if (account.account === "reviewinbox") {
             if (["create_branch", "update_file", "edit_file", "commit_files"].includes(operation)) bad("READ_ONLY_CONTENTS");
             if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
+            if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
+          }
+          if (reviewOnly(account.account, repo)) {
+            if (["create_branch", "update_file", "edit_file", "commit_files", "create_pull", "update_pull", "create_issue", "update_issue"].includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
             if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
           const root = "/repos/" + OWNER + "/" + repo;
