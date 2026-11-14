@@ -3,7 +3,9 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const CATALOG={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const SIX={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const CATALOG={...SIX,cindy:1457433299};
+const CINDY_EXECUTION=['bb','cindy','deja','dd','qq'];
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
 const PEM=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=Date.parse('2026-11-10T21:00:00Z');
@@ -23,25 +25,26 @@ function fixture({account='deja',installation=CATALOG,execution=CATALOG,alterIns
  return {client,calls,keyReads:()=>keyReads};
 }
 const input=(repo='MontClip',account='deja')=>({account,repo,operation:'identity',args:{}});
-test('Deja can use each of the six authorized repositories with exact narrowed token IDs',async()=>{
+test('Deja can use each of the seven authorized repositories with exact narrowed token IDs',async()=>{
  for(const repo of Object.keys(CATALOG)){
   const f=fixture(),r=await f.client.run(input(repo));assert.equal(r.ok,true,repo+': '+r.errorCode);
   assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body.repository_ids,Object.values(CATALOG));
-  assert.equal(r.result.installationRepositories.length,6);assert.equal(r.result.repositories.length,6);assert.equal(r.receipt.scopeRevision,0);
+  assert.equal(r.result.installationRepositories.length,7);assert.equal(r.result.repositories.length,7);assert.equal(r.receipt.scopeRevision,0);
  }
 });
 test('an outside repository fails before credentials',async()=>{const f=fixture(),r=await f.client.run(input('outside'));assert.equal(r.errorCode,'REPOSITORY_NOT_ALLOWED');assert.equal(f.keyReads(),0);});
 test('account defaults match the authorized installation and execution matrix',async()=>{
  for(const account of Object.keys(ACCOUNTS).filter(a=>a!=='deja')){
-  const installation=CATALOG,execution=account==='reviewinbox'?TWO:CATALOG;
+  const installation=CATALOG,execution=account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX;
   const f=fixture({account,installation,execution}),r=await f.client.run(input('MontClip',account));assert.equal(r.ok,true,account+': '+r.errorCode);
   assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body.repository_ids,Object.values(execution));
   if(account==='reviewinbox')assert.equal((await f.client.run(input('montclip-rsi',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
+  if(!CINDY_EXECUTION.includes(account))assert.equal((await f.client.run(input('cindy',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
  }
 });
 test('six-repository installation still refuses wrong IDs, duplicate rows and incomplete listings',async()=>{
  const full=rows(CATALOG);
- for(const alterInstallation of [rows({...CATALOG,MontClip:1}),{...full,total_count:7},{...full,repositories:full.repositories.slice(1)},{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]},{...full,repositories:[null,...full.repositories.slice(1)]}]){
+ for(const alterInstallation of [rows({...CATALOG,MontClip:1}),{...full,total_count:8},{...full,repositories:full.repositories.slice(1)},{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]},{...full,repositories:[null,...full.repositories.slice(1)]}]){
   const f=fixture({alterInstallation}),r=await f.client.run(input());assert.equal(r.ok,false);assert.equal(r.execution,'not_executed');
   assert.equal(f.calls.filter(c=>c.path.endsWith('/access_tokens')).length,1);
  }
