@@ -44,7 +44,8 @@ for(const stage of ['installation','execution']){
   test(`${stage} scope diagnostic: ${variant} remains blocked before business execution`,async()=>{
    const actual=structuredClone(repos);
    if(variant==='extra')actual.repositories.push({id:99,name:'other',full_name:'good-night-oppie/other'});
-   if(variant==='missing')actual.repositories.pop();
+   // #22: the last catalog row is the optional cindy fork; drop a required repository instead.
+   if(variant==='missing')actual.repositories.shift();
    if(variant==='wrong-id')actual.repositories[0].id=99;
    if(variant==='duplicate')actual.repositories[1]=actual.repositories[0];
    actual.total_count=variant==='count'?99:actual.repositories.length;

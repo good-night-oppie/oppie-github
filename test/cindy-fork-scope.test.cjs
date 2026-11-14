@@ -19,15 +19,16 @@ const ASSISTED='m\n\nAssisted-by: Cindy (https://cindy.app)';
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const now=Date.parse('2026-11-14T07:00:00Z');
 const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
-function fixture(account){
- const calls=[];let keyReads=0;const a=ACCOUNTS[account];
+function fixture(account,{installed=rows(SEVEN)}={}){
+ const calls=[];let keyReads=0,requested;const a=ACCOUNTS[account];
  const permissions=TOKEN_PERMISSIONS(account),installPermissions={...permissions,...(account==='pg'?{administration:'write'}:{})};
  const client=createClient({now:()=>now,authorize:async()=>true,claimAuthorization:async()=>true,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
   const u=new URL(url),route=u.pathname,method=init.method||'GET',body=init.body?JSON.parse(init.body):null;calls.push({route,body,method});let data,status=200;
   if(route==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',permissions:installPermissions};
-  else if(route.endsWith('/access_tokens'))data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?permissions:{metadata:'read'}};
-  else if(route==='/installation/repositories')data=rows(init.headers.Authorization==='Bearer probe'?SEVEN:DESIGN[account]);
+  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?permissions:{metadata:'read'}};}
+  // The execution token sees exactly the catalog repositories it was minted for.
+  else if(route==='/installation/repositories')data=init.headers.Authorization==='Bearer probe'?installed:rows(Object.fromEntries(Object.entries(SEVEN).filter(([,id])=>requested.includes(id))));
   else if(/^\/repos\/good-night-oppie\/[^/]+$/.test(route)&&method==='GET')data={default_branch:'main'};
   else if(route.includes('/contents/')&&method==='GET'&&u.searchParams.has('ref')){status=404;data={message:'Not Found'};}
   else if(/\/pulls\/7$/.test(route)&&method==='GET')data={number:7,head:{sha:SHA},state:'open',draft:false};
@@ -65,7 +66,7 @@ test('the github tool repo enum offers cindy; the review queue does not',()=>{
  assert.deepEqual(QUEUE_REPOS,['good-night-oppie/MontClip','good-night-oppie/MontClip-Cindy']);
 });
 test('the review queue refuses a cindy target without calling GitHub',async t=>{
- const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'oppie-q22-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const root=fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()),'oppie-q22-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  let calls=0;const q=createQueue({client:{run:async()=>{calls++;return {ok:true,result:[]};}},statePath:path.join(root,'state.json'),now:()=>now});
  assert.equal((await q.initialize()).ok,true);const before=calls;
  for(const action of ['claim','finish']){const r=await q[action]({repo:'good-night-oppie/cindy',number:1,head_sha:SHA,claim_id:'x'});assert.equal(r.ok,false);assert.equal(r.errorCode,'INVALID_TARGET');}
@@ -170,4 +171,47 @@ test('QQ admin, ruleset, dismissal and merge-queue operations do not extend to c
 });
 test('QQ keeps its existing operations on the original repositories',async()=>{
  const f=fixture('qq'),r=await run(f,'qq','list_rulesets',{},'MontClip');assert.equal(r.ok,true,r.errorCode);
+});
+
+// 10. QQ (production incident): the same package works before and after DD adds cindy to an installation.
+const without=(map,name)=>Object.fromEntries(Object.entries(map).filter(([n])=>n!==name));
+const tokens=f=>f.calls.filter(c=>c.route.endsWith('/access_tokens'));
+for(const [account,execution] of Object.entries(DESIGN)){
+ test(account+' identity passes whether or not cindy is installed, and the token covers only installed repositories',async()=>{
+  for(const [state,installed] of [['with cindy',SEVEN],['without cindy',SIX]]){
+   const repo=Object.keys(execution)[0],f=fixture(account,{installed:rows(installed)}),r=await run(f,account,'identity',{},repo);
+   assert.equal(r.ok,true,state+': '+r.errorCode);
+   assert.equal(r.result.installationRepositories.length,Object.keys(installed).length,state);
+   const effective=Object.values(execution).filter(id=>Object.values(installed).includes(id));
+   assert.deepEqual(tokens(f).at(-1).body.repository_ids,effective,state);
+   assert.deepEqual(r.result.repositories.map(x=>x.id),effective,state);
+  }
+ });
+ test(account+' still refuses an extra non-cindy repository and a missing required repository',async()=>{
+  const extra={id:99,name:'other',full_name:'good-night-oppie/other'};
+  const cases=[];
+  for(const base of [SEVEN,SIX]){
+   const r=rows(base);r.repositories.push(extra);r.total_count++;cases.push(['extra',r]);
+   for(const name of Object.keys(SIX))cases.push(['missing '+name,rows(without(base,name))]);
+  }
+  const wrongId=rows(SEVEN);wrongId.repositories.at(-1).id=1;cases.push(['wrong cindy id',wrongId]);
+  const duplicate=rows(SEVEN);duplicate.repositories.push(duplicate.repositories.at(-1));duplicate.total_count++;cases.push(['duplicate cindy',duplicate]);
+  const truncated=rows(SEVEN);truncated.repositories.pop();cases.push(['incomplete listing',truncated]);
+  for(const [label,installed] of cases){
+   const f=fixture(account,{installed}),r=await run(f,account,'identity',{},Object.keys(execution)[0]);
+   assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH',label);assert.equal(r.execution,'not_executed',label);
+   assert.equal(tokens(f).length,1,label);
+  }
+ });
+}
+for(const account of Object.keys(DESIGN).filter(a=>Object.hasOwn(DESIGN[a],'cindy')))test(account+' without cindy installed: cindy fails on its own and the other repositories keep working',async()=>{
+ for(const [operation,args] of [['identity',{}],['get_issue',{number:1}]]){
+  const f=fixture(account,{installed:rows(SIX)}),r=await run(f,account,operation,args);
+  assert.equal(r.errorCode,'OPTIONAL_REPOSITORY_NOT_INSTALLED',operation);assert.equal(r.execution,'not_executed');
+  assert.equal(tokens(f).length,1,'no execution token is minted');assert.equal(writes(f).length,0);
+ }
+ for(const repo of Object.keys(SIX).filter(r=>Object.hasOwn(DESIGN[account],r))){
+  const f=fixture(account,{installed:rows(SIX)}),r=await run(f,account,'get_issue',{number:1},repo);
+  assert.equal(r.ok,true,repo+': '+r.errorCode);
+ }
 });

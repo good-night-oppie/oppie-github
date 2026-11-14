@@ -4,6 +4,9 @@
 const SIX=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
 // #22: the fork good-night-oppie/cindy is part of every App installation (DD adds it to all 12).
 const CATALOG=Object.freeze({...SIX,cindy:1457433299});
+// #22 (QQ, production incident): installations with or without cindy are both valid until DD
+// finishes the rollout. Only these repositories may be absent from an installation.
+const OPTIONAL_REPOSITORIES=Object.freeze(['cindy']);
 const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
 const TWO=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339});
 // #22 (QQ review): roles on the cindy fork. bb/deja write (branches, files, PRs); dd reads and
@@ -51,4 +54,4 @@ function validatePolicy(value){
  return Object.freeze({schemaVersion:1,revision:value.revision,accounts:Object.freeze(accounts)});
 }
 function initialPolicy(){return validatePolicy({schemaVersion:1,revision:0,accounts:Object.fromEntries(ACCOUNT_NAMES.map(a=>[a,baseline(a)]))});}
-module.exports={CATALOG,SIX,TWO,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};
+module.exports={CATALOG,SIX,TWO,OPTIONAL_REPOSITORIES,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};
