@@ -5,7 +5,7 @@ const {validateEdits,applyEdits,MAX_FILE_BYTES}=require('./file-edit.cjs');
 const commitFilesModule=require('./commit-files.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
 const OWNER = 'good-night-oppie';
-const {initialPolicy,validatePolicy}=require('./repository-policy.cjs');
+const {initialPolicy,validatePolicy,repositoryRestriction,OPTIONAL_REPOSITORIES}=require('./repository-policy.cjs');
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
@@ -81,6 +81,12 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(['create_branch','update_file','edit_file','commit_files'].includes(operation))bad('READ_ONLY_CONTENTS');
     if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
     if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
+   }
+   // #22: on the cindy fork DD and QQ may only read and review; DD reviews are COMMENT only.
+   const restriction=repositoryRestriction(account.account,repo);
+   if(restriction){
+    if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
+    if(restriction.commentOnly&&operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
    const root='/repos/'+OWNER+'/'+repo;
    // Validate the entire operation before reading a private key or obtaining a token.
@@ -170,12 +176,27 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      actualRepositoriesComplete:Array.isArray(observed?.repositories)&&names.length===list.length&&observed.total_count===list.length};
     bad(code);
    }
-   if(!exactRepos(probe,scope.installation))scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,scope.installation);
-   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(expectedRepos),permissions:permissions(account,operation)});
+   // #22: cindy is optional while DD rolls it out to the App installations. Every required
+   // repository must be installed with its catalog ID; an optional one is accepted only with its
+   // catalog ID; any other repository, duplicate or incomplete listing is still a mismatch.
+   function installedOptional(r,expected){
+    if(!Array.isArray(r?.repositories)||r.total_count!==r.repositories.length)return null;
+    const ids=new Set(),names=[];
+    for(const x of r.repositories){if(!obj(x)||typeof x.name!=='string'||x.full_name!==OWNER+'/'+x.name||!Object.hasOwn(expected,x.name)||expected[x.name]!==x.id||ids.has(x.id))return null;ids.add(x.id);names.push(x.name);}
+    if(Object.keys(expected).some(n=>!OPTIONAL_REPOSITORIES.includes(n)&&!names.includes(n)))return null;
+    return names.filter(n=>OPTIONAL_REPOSITORIES.includes(n));
+   }
+   const optionalPresent=installedOptional(probe,scope.installation);
+   if(optionalPresent===null)scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,scope.installation);
+   // Without the optional repository installed, other repositories keep working and the optional
+   // one fails on its own before any execution token is minted.
+   const effectiveRepos=Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n])=>!OPTIONAL_REPOSITORIES.includes(n)||optionalPresent.includes(n))));
+   if(!Object.hasOwn(effectiveRepos,repo))bad('REPOSITORY_NOT_INSTALLED');
+   const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(effectiveRepos),permissions:permissions(account,operation)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
    const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account,'execution',operation);
    const repos=await api('/installation/repositories?per_page=100',token);
-   if(!exactRepos(repos))scopeMismatch('EXECUTION_REPOSITORY_SCOPE_MISMATCH',repos,expectedRepos);
+   if(!exactRepos(repos,effectiveRepos))scopeMismatch('EXECUTION_REPOSITORY_SCOPE_MISMATCH',repos,effectiveRepos);
    if(preflight?.kind==='owner_reference'){
     const match=preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
     if(!match||!Object.hasOwn(expectedRepos,match[1])||![repo,'MontClip'].includes(match[1]))bad('OWNER_REFERENCE_SCOPE');

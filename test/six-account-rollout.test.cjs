@@ -1,14 +1,14 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const {CATALOG}=require('../node/repository-policy.cjs');
+const {CATALOG,SIX:SIX_REPOS,CINDY_EXECUTION,repositoryRestriction}=require('../node/repository-policy.cjs');
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
 const SIX=['bb','cindy','deja','dd','gg','jj','rea','pg','video','vv'];
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const now=Date.parse('2026-11-10T22:00:00Z');
 function fixture(account,options={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
- const execution=account==='reviewinbox'?TWO:CATALOG;
+ const execution=account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
  const installation=CATALOG;
  const permissions={contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const installPermissions={...permissions,...(account==='pg'?{administration:'write'}:{})};
@@ -24,20 +24,22 @@ function fixture(account,options={}){
   return {ok:true,status:200,text:async()=>JSON.stringify(data)};
  }});return {client,calls,keyReads:()=>keyReads,permissions};
 }
-for(const account of SIX)test(account+' uses all six repositories for ordinary issue writes',async()=>{
- for(const repo of Object.keys(CATALOG)){
+for(const account of SIX)test(account+' uses its execution repositories for ordinary issue writes',async()=>{
+ const execution=CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
+ for(const repo of Object.keys(execution)){
   const f=fixture(account),result=await f.client.run({account,repo,operation:'create_issue',args:{title:'synthetic scope test'}});
+  if(repositoryRestriction(account,repo)){assert.equal(result.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(f.keyReads(),0);continue;}
   assert.equal(result.ok,true,repo+': '+result.errorCode);
   const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body;
-  assert.deepEqual(request.repository_ids,Object.values(CATALOG));assert.deepEqual(request.permissions,f.permissions);
+  assert.deepEqual(request.repository_ids,Object.values(execution));assert.deepEqual(request.permissions,f.permissions);
   assert.equal(f.calls.filter(c=>c.path.startsWith('/repos/')).length,1);
  }
 });
 for(const account of ['qq','reviewinbox'])test(account+' retains repository and execution permission boundaries',async()=>{
  const f=fixture(account),r=await f.client.run({account,repo:'MontClip',operation:'identity'});
  assert.equal(r.ok,true,r.errorCode);
- assert.equal(r.result.repositories.length,account==='qq'?6:2);
- assert.equal(r.result.installationRepositories.length,['qq','reviewinbox'].includes(account)?6:2);
+ assert.equal(r.result.repositories.length,account==='qq'?7:2);
+ assert.equal(r.result.installationRepositories.length,7);
  assert.deepEqual(r.result.permissions,f.permissions);
  if(account!=='qq')assert.equal((await f.client.run({account,repo:'oppie-github',operation:'identity'})).errorCode,'REPOSITORY_NOT_ALLOWED');
 });

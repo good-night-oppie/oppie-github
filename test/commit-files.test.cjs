@@ -12,7 +12,7 @@ const {gitBlobSha}=require('../node/commit-files.cjs');
 const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
-const repos={total_count:6,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const repos={total_count:Object.keys(CATALOG).length,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
 const ROOT='/repos/good-night-oppie/MontClip';
 const MSG='Change files\n\nAssisted-by: Cindy (https://cindy.app)';
 const fakeSha=x=>crypto.createHash('sha1').update(JSON.stringify(x)).digest('hex');

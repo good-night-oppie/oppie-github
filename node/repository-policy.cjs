@@ -1,9 +1,25 @@
 'use strict';
 
 // Non-secret, reviewed repository identities. Discovery never changes this catalog.
-const CATALOG=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
+const SIX=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929});
+// #22: the fork good-night-oppie/cindy is part of every App installation (DD adds it to all 12).
+const CATALOG=Object.freeze({...SIX,cindy:1457433299});
+// #22 (QQ, production incident): installations with or without cindy are both valid until DD
+// finishes the rollout. Only these repositories may be absent from an installation.
+const OPTIONAL_REPOSITORIES=Object.freeze(['cindy']);
 const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
 const TWO=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339});
+// #22 (QQ review): roles on the cindy fork. bb/deja write (branches, files, PRs); dd reads and
+// posts COMMENT reviews only; qq uses review operations only (no admin, ruleset, dismissal or
+// merge queue). Every other account is left out of cindy execution until a separate small PR.
+const CINDY_ROLES=Object.freeze({bb:'write',deja:'write',dd:'comment_review',qq:'review'});
+const CINDY_EXECUTION=Object.freeze(Object.keys(CINDY_ROLES));
+const REVIEW_OPERATIONS=Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review']);
+// Per-repository operation allowlist on top of the account's existing role; null means unchanged.
+function repositoryRestriction(account,repo){
+ if(repo!=='cindy'||!Object.hasOwn(CINDY_ROLES,account)||CINDY_ROLES[account]==='write')return null;
+ return Object.freeze({operations:REVIEW_OPERATIONS,commentOnly:CINDY_ROLES[account]==='comment_review'});
+}
 function invalid(){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';throw e;}
 function record(value,keys){
  if(!value||typeof value!=='object'||Array.isArray(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))invalid();
@@ -12,7 +28,7 @@ function record(value,keys){
 }
 function repoMap(value){
  if(!value||typeof value!=='object'||Array.isArray(value))invalid();
- const names=Object.keys(value);if(!names.length||names.length>6)invalid();record(value,names);
+ const names=Object.keys(value);if(!names.length||names.length>Object.keys(CATALOG).length)invalid();record(value,names);
  const selected={};
  for(const name of Object.keys(CATALOG))if(Object.hasOwn(value,name)){
   if(value[name]!==CATALOG[name])invalid();selected[name]=CATALOG[name];
@@ -20,7 +36,7 @@ function repoMap(value){
  if(Object.keys(selected).length!==names.length)invalid();
  return Object.freeze(selected);
 }
-function baseline(account){return {installation:CATALOG,execution:account==='reviewinbox'?TWO:CATALOG};}
+function baseline(account){return {installation:CATALOG,execution:account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX};}
 function sameMap(a,b){return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>a[k]===b[k]);}
 function validatePolicy(value){
  record(value,['schemaVersion','revision','accounts']);
@@ -38,4 +54,4 @@ function validatePolicy(value){
  return Object.freeze({schemaVersion:1,revision:value.revision,accounts:Object.freeze(accounts)});
 }
 function initialPolicy(){return validatePolicy({schemaVersion:1,revision:0,accounts:Object.fromEntries(ACCOUNT_NAMES.map(a=>[a,baseline(a)]))});}
-module.exports={CATALOG,ACCOUNT_NAMES,initialPolicy,validatePolicy};
+module.exports={CATALOG,SIX,TWO,OPTIONAL_REPOSITORIES,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};

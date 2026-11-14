@@ -5,7 +5,7 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 仅作 COMMENT 评审。",
-  "version": "1.5.0-preview.7",
+  "version": "1.5.0-preview.8",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
@@ -101,7 +101,8 @@
               "montclip-rsi",
               "rsi-playbooks",
               "oppie-github",
-              "sglang-review-inbox"
+              "sglang-review-inbox",
+              "cindy"
             ]
           },
           "operation": {
@@ -242,6 +243,6 @@
       }
     ]
   },
-  "releaseNotes": "候选：Video 和 VV 对齐标准六仓；PG 兼容安装时额外授予的权限，普通执行令牌仍限四项。QQ 与 ReviewInbox 的范围和操作限制不变；热配置界面留待后续。",
+  "releaseNotes": "候选（#22，按 QQ 审查）：repo 枚举加入 fork good-night-oppie/cindy，作为可选安装仓：App 安装里有没有 cindy 都能用；多出其他仓或缺少必须的仓仍报不匹配；没装 cindy 时只有 cindy 的操作报 REPOSITORY_NOT_INSTALLED。cindy 上：bb/deja 可写分支、文件和 PR；DD 只读，评审仅 COMMENT；QQ 只用审查类操作；其余账号不列入。review queue 不含 cindy，App 权限不变。",
   "confirm": true
 }

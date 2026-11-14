@@ -8,11 +8,13 @@ Use a fixed, reviewed catalog of repositories belonging to good-night-oppie. Ver
 
 | Account | Installation | Execution | Existing operation boundary |
 | --- | --- | --- | --- |
-| bb, cindy, deja, dd, gg, jj, rea, pg, video, vv | Six | Six | Ordinary account operations; no administration |
-| qq | Six | Six | Existing QQ_ALLOWED / QQ_ONLY rules and contents:read |
-| reviewinbox | Six | Two | contents:read and COMMENT-only reviews |
+| bb, deja | Seven | Seven | Ordinary account operations; no administration |
+| dd | Seven | Seven | Ordinary operations on the six; on cindy only reads and COMMENT reviews |
+| cindy, gg, jj, rea, pg, video, vv | Seven | Six | Ordinary account operations; no administration |
+| qq | Seven | Seven | Existing QQ_ALLOWED / QQ_ONLY rules and contents:read; on cindy only reads and reviews |
+| reviewinbox | Seven | Two | contents:read and COMMENT-only reviews |
 
-Six means MontClip/1441621868, MontClip-Cindy/1446532339, montclip-rsi/1450602468, rsi-playbooks/1450603260, oppie-github/1451885379 and sglang-review-inbox/1451900929. Two means MontClip and MontClip-Cindy.
+Six means MontClip/1441621868, MontClip-Cindy/1446532339, montclip-rsi/1450602468, rsi-playbooks/1450603260, oppie-github/1451885379 and sglang-review-inbox/1451900929. Seven adds cindy/1457433299, the fork good-night-oppie/cindy (#22). Two means MontClip and MontClip-Cindy. cindy is optional in installations (production incident on #22): six required repositories plus an optional cindy are accepted, anything else is a mismatch, and cindy operations fail alone with REPOSITORY_NOT_INSTALLED while it is absent. Cindy roles follow QQ's review of #22: bb and deja write; dd reads and posts COMMENT reviews; qq uses review operations only (admin, ruleset, dismissal and merge-queue operations are not extended to cindy). Accounts without a cindy task are left out rather than made read-only, because any execution grant mints a token that covers the fork; the agy implementation owner is added in a separate small PR. The review queue does not include cindy.
 
 The account grants above include the subsequent Video/VV authorization recorded in issue #8 and supersede the initial Deja-only candidate. Repository access does not override a teammate's task authorization or restrictions on comments, reviews, approvals or merges.
 
