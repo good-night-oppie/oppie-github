@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const {CATALOG,SIX:SIX_REPOS,CINDY_EXECUTION,reviewOnly}=require('../node/repository-policy.cjs');
+const {CATALOG,SIX:SIX_REPOS,CINDY_EXECUTION,repositoryRestriction}=require('../node/repository-policy.cjs');
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
 const SIX=['bb','cindy','deja','dd','gg','jj','rea','pg','video','vv'];
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
@@ -28,7 +28,7 @@ for(const account of SIX)test(account+' uses its execution repositories for ordi
  const execution=CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
  for(const repo of Object.keys(execution)){
   const f=fixture(account),result=await f.client.run({account,repo,operation:'create_issue',args:{title:'synthetic scope test'}});
-  if(reviewOnly(account,repo)){assert.equal(result.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(f.keyReads(),0);continue;}
+  if(repositoryRestriction(account,repo)){assert.equal(result.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(f.keyReads(),0);continue;}
   assert.equal(result.ok,true,repo+': '+result.errorCode);
   const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body;
   assert.deepEqual(request.repository_ids,Object.values(execution));assert.deepEqual(request.permissions,f.permissions);
