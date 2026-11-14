@@ -8,7 +8,7 @@ const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
 const expected={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
 const {CATALOG}=require('../node/repository-policy.cjs');
-const repos={total_count:6,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const repos={total_count:Object.keys(CATALOG).length,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
 const twoRepos={total_count:2,repositories:repos.repositories.filter(r=>Object.hasOwn(REPOSITORIES,r.name))};
 const SHA='a'.repeat(40);
 function fixture(options={}){
@@ -92,7 +92,7 @@ test('JWT is RSA signed, short lived, and names fixed app id',()=>{
 });
 test('identity verifies app, installation and exact repos; credentials never returned',async()=>{
  const f=fixture();const r=await f.client.run(input('identity'));
- assert.equal(r.ok,true);assert.equal(r.receipt.app_slug,'oppie-agent-bb');assert.equal(r.result.repositories.length,6);
+ assert.equal(r.ok,true);assert.equal(r.receipt.app_slug,'oppie-agent-bb');assert.equal(r.result.repositories.length,7);
  assert.ok(!JSON.stringify(r).includes('secret-token'));assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
  const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens'));
  assert.deepEqual(grants[0].parsed,{permissions:{metadata:'read'}});
@@ -195,8 +195,8 @@ test('failed credential provider does not expose error content',async()=>{
  assert.deepEqual(await client.run(input('identity')),{ok:false,errorCode:'CREDENTIAL_UNAVAILABLE',execution:'not_executed'});
 });
 
-const qqRepos={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
-const qqRepoSet={total_count:6,repositories:Object.entries(qqRepos).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))};
+const qqRepos=CATALOG;
+const qqRepoSet={total_count:Object.keys(qqRepos).length,repositories:Object.entries(qqRepos).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))};
 test('QQ six-repo identity narrows contents permission and permits permission supersets',async()=>{const f=fixture({account:'qq',repositories:qqRepoSet,permissions:{...expected,administration:'write',checks:'write'}});const r=await f.client.run({...input('identity',{},'qq'),repo:'oppie-github'});assert.equal(r.ok,true);const p=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.equal(p.permissions.contents,'read');assert.deepEqual(p.repository_ids.sort(),Object.values(qqRepos).sort());});
 test('QQ denies authoring and unconfirmed admin before credentials, other aliases cannot use QQ operations',async()=>{for(const operation of ['create_pull','update_pull','update_file','create_branch','create_issue','comment_issue','admin_update','ruleset_update']){const f=fixture({account:'qq'});assert.equal((await f.client.run(input(operation,{},'qq'))).ok,false);assert.equal(f.credentialsCalls(),0);}const f=fixture();assert.equal((await f.client.run(input('list_rulesets'))).ok,false);assert.equal(f.credentialsCalls(),0);});
 
@@ -220,11 +220,11 @@ test('QQ refuses nonexistent or non-owner authorization references even after co
 test('ruleset update rejects an expired owner comment before PUT',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{id:3278807,type:'User'},created_at:'2000-01-01T00:00:00Z',body:'old'}};}});assert.equal((await f.client.run(input('ruleset_update',args,'qq'))).ok,false);assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
 
 test('consumed owner nonce cannot produce a second ruleset write',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,claimAuthorization:async()=>false,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{login:'EdwardTang',id:3278807,type:'User'},created_at:new Date(NOW-1000).toISOString(),body:require('../node/owner-authorization.cjs').requiredLine('MontClip',args)}};}});const r=await f.client.run(input('ruleset_update',args,'qq'));assert.equal(r.errorCode,'OWNER_AUTHORIZATION_REPLAYED');assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
-const riInstall={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
+const riInstall=CATALOG;
 const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
 function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||twoRepos)};}});}
 test('ReviewInbox validates six installation repos while minting original two-repo execution token',async()=>{
- const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,6);assert.equal(r.result.repositories.length,2);
+ const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,7);assert.equal(r.result.repositories.length,2);
  const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(REPOSITORIES).sort());assert.deepEqual(request.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
 });
 test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail closed',async()=>{
