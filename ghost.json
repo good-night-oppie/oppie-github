@@ -243,6 +243,6 @@
       }
     ]
   },
-  "releaseNotes": "候选（#22）：repo 枚举加入 fork good-night-oppie/cindy。12 个账号的安装仓库集合都变成 7 个（须先由 DD 把 cindy 加进 12 个 App 的安装范围）；bb/cindy/deja 可在 cindy 上按原有操作写分支和 PR，DD 在 cindy 上只读、评论和 COMMENT 评审，QQ 原有限制不变，其余账号暂不能操作 cindy。App 权限不变。",
+  "releaseNotes": "候选（#22，按 QQ 审查）：repo 枚举加入 fork good-night-oppie/cindy。12 个账号的安装仓库集合都变成 7 个（须先由 DD 把 cindy 加进 12 个 App 的安装范围）。cindy 上：bb/deja 可写分支、文件和 PR；DD 只读，评审仅 COMMENT；QQ 只用审查类操作；其余账号不列入。review queue 不含 cindy，App 权限不变。",
   "confirm": true
 }
