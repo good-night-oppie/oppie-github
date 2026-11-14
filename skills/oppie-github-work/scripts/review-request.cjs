@@ -282,10 +282,12 @@ var require_repository_policy = __commonJS({
     var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
     var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var CINDY_EXECUTION = Object.freeze(["bb", "cindy", "deja", "dd", "qq"]);
-    var REVIEW_ONLY = Object.freeze({ dd: Object.freeze(["cindy"]) });
-    function reviewOnly(account, repo) {
-      return Object.hasOwn(REVIEW_ONLY, account) && REVIEW_ONLY[account].includes(repo);
+    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "comment_review", qq: "review" });
+    var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
+    var REVIEW_OPERATIONS = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]);
+    function repositoryRestriction(account, repo) {
+      if (repo !== "cindy" || !Object.hasOwn(CINDY_ROLES, account) || CINDY_ROLES[account] === "write") return null;
+      return Object.freeze({ operations: REVIEW_OPERATIONS, commentOnly: CINDY_ROLES[account] === "comment_review" });
     }
     function invalid() {
       const e = new Error("INVALID_SCOPE_CONFIGURATION");
@@ -335,7 +337,7 @@ var require_repository_policy = __commonJS({
     function initialPolicy() {
       return validatePolicy({ schemaVersion: 1, revision: 0, accounts: Object.fromEntries(ACCOUNT_NAMES.map((a) => [a, baseline(a)])) });
     }
-    module2.exports = { CATALOG, SIX, TWO, CINDY_EXECUTION, REVIEW_ONLY, reviewOnly, ACCOUNT_NAMES, initialPolicy, validatePolicy };
+    module2.exports = { CATALOG, SIX, TWO, CINDY_ROLES, CINDY_EXECUTION, REVIEW_OPERATIONS, repositoryRestriction, ACCOUNT_NAMES, initialPolicy, validatePolicy };
   }
 });
 
@@ -349,7 +351,7 @@ var require_core = __commonJS({
     var commitFilesModule = require_commit_files();
     var MAX_OPERATION_BYTES = 261120;
     var OWNER = "good-night-oppie";
-    var { initialPolicy, validatePolicy, reviewOnly } = require_repository_policy();
+    var { initialPolicy, validatePolicy, repositoryRestriction } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
@@ -529,9 +531,10 @@ var require_core = __commonJS({
             if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
             if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
-          if (reviewOnly(account.account, repo)) {
-            if (["create_branch", "update_file", "edit_file", "commit_files", "create_pull", "update_pull", "create_issue", "update_issue"].includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
-            if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
+          const restriction = repositoryRestriction(account.account, repo);
+          if (restriction) {
+            if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
+            if (restriction.commentOnly && operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
           const root = "/repos/" + OWNER + "/" + repo;
           let method = "GET", route, body, preflight;
