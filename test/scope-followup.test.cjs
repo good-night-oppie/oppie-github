@@ -1,12 +1,12 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const {CATALOG}=require('../node/repository-policy.cjs');
+const {CATALOG,SIX,CINDY_EXECUTION}=require('../node/repository-policy.cjs');
 const BASIC={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=Date.parse('2026-11-10T23:00:00Z');
-const rows=()=>({total_count:6,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
-function fixture(account,{installationPermissions=BASIC,executionPermissions=BASIC,installationRows=rows(),executionRows=rows()}={}){
+const rows=(map=CATALOG)=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
+function fixture(account,{installationPermissions=BASIC,executionPermissions=BASIC,installationRows=rows(),executionRows=rows(CINDY_EXECUTION.includes(account)?CATALOG:SIX)}={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
  const client=createClient({now:()=>NOW,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
   const route=new URL(url).pathname,body=init.body?JSON.parse(init.body):null;calls.push({route,body});let data;
@@ -22,11 +22,11 @@ function fixture(account,{installationPermissions=BASIC,executionPermissions=BAS
 }
 for(const account of ['video','vv']){
  test(account+' supports ordinary writes in every reviewed repository',async()=>{
-  for(const repo of Object.keys(CATALOG)){
+  for(const repo of Object.keys(SIX)){
    const f=fixture(account),r=await f.client.run({account,repo,operation:'create_issue',args:{title:'synthetic test'}});
    assert.equal(r.ok,true,repo+': '+r.errorCode);
    const mint=f.calls.filter(c=>c.route.endsWith('/access_tokens')).at(-1);
-   assert.deepEqual(mint.body,{repository_ids:Object.values(CATALOG),permissions:BASIC});
+   assert.deepEqual(mint.body,{repository_ids:Object.values(SIX),permissions:BASIC});
    assert.equal(f.calls.filter(c=>c.route.startsWith('/repos/')).length,1);
   }
  });
