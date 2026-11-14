@@ -1,5 +1,9 @@
 # 伙伴 GitHub plugin
 
+## Fork good-night-oppie/cindy (#22)
+
+The repository enum and catalog add `cindy` (good-night-oppie/cindy, repository ID 1457433299). Every account's installation set becomes the seven catalog repositories, so this package may be installed only after DD has added cindy to all twelve App installations and read each one back (#19); before that, identity fails with INSTALLATION_REPOSITORY_SCOPE_MISMATCH on every repository. Execution on cindy: bb, cindy and deja with their ordinary operations; DD read, issue comments and COMMENT reviews only; QQ with its existing restrictions. gg, jj, rea, pg, video and vv keep the original six and ReviewInbox keeps two, pending a decision by QQ or the owner. No App permission changes; default-branch refusal, fast-forward-only commits and no automatic approval or merge are unchanged.
+
 ## Six-repository configuration candidate
 
 This candidate enables six-repository installation and execution scopes for bb, cindy, deja, dd, gg, jj, rea, pg, video and vv. QQ remains six/six; ReviewInbox remains six/two. Existing operation roles are unchanged. PG's installation may contain additional owner-granted permissions, provided the four ordinary required permissions are sufficient. Its execution token still requests and validates only contents/write, issues/write, pull_requests/write and metadata/read; additional installation grants never enable administrative operations. Each request validates and freezes one scope snapshot before accessing credentials; identity and successful receipts now include the scope revision.
