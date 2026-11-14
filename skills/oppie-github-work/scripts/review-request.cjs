@@ -90,11 +90,7 @@ var require_commit_files = __commonJS({
   "node/commit-files.cjs"(exports2, module2) {
     "use strict";
     var crypto = require("node:crypto");
-    var fs = require("node:fs/promises");
-    var path = require("node:path");
     var MAX_CHANGES = 500;
-    var MAX_LOCAL_FILE_BYTES = 50 * 1024 * 1024;
-    var MAX_LOCAL_TOTAL_BYTES = 200 * 1024 * 1024;
     var BLOB_UPLOAD_TIMEOUT_MS = 11e4;
     var MODES = ["100644", "100755"];
     var SOURCES = ["content_base64", "blob_sha", "local_file", "from", "delete", "gitlink_sha"];
@@ -137,6 +133,7 @@ var require_commit_files = __commonJS({
         const sources = SOURCES.filter((k) => c[k] !== void 0);
         if (sources.length !== 1) bad("INVALID_CHANGE_SOURCE");
         const kind = sources[0];
+        if (kind === "local_file") bad("LOCAL_FILE_DISABLED");
         if (c.git_sha !== void 0 && kind !== "local_file") bad("INVALID_CHANGE_SOURCE");
         if (c.mode !== void 0 && (!MODES.includes(c.mode) || ["delete", "gitlink_sha"].includes(kind))) bad("INVALID_MODE");
         const out = { kind, path: claim(c.path), mode: c.mode };
@@ -150,40 +147,11 @@ var require_commit_files = __commonJS({
           if (c.delete !== true) bad("INVALID_CHANGE_SOURCE");
         } else if (kind === "from") {
           out.from = claim(c.from);
-        } else if (kind === "local_file") {
-          if (typeof c.local_file !== "string" || c.local_file.includes("\0") || !path.isAbsolute(c.local_file)) bad("INVALID_LOCAL_FILE");
-          out.localFile = c.local_file;
-          out.sha = sha(c.git_sha).toLowerCase();
         }
         changes.push(out);
       }
       for (const p of touched) for (let i = p.indexOf("/"); i > 0; i = p.indexOf("/", i + 1)) if (touched.has(p.slice(0, i))) bad("PATH_CONFLICT");
-      return { branch, expectedHead, parent, mergeParent, message, changes, localTotalLimit: MAX_LOCAL_TOTAL_BYTES };
-    }
-    async function readLocalFile(file, maxBytes = MAX_LOCAL_FILE_BYTES) {
-      const fail = (code) => {
-        throw Object.assign(new Error(code), { code });
-      };
-      let st;
-      try {
-        st = await fs.lstat(file);
-      } catch (_) {
-        fail("LOCAL_FILE_UNAVAILABLE");
-      }
-      if (st.isSymbolicLink() || !st.isFile()) fail("LOCAL_FILE_NOT_REGULAR");
-      if (st.size > maxBytes) fail("LOCAL_FILE_TOO_LARGE");
-      const bytes = await fs.readFile(file);
-      if (bytes.length !== st.size || bytes.length > maxBytes) fail("LOCAL_FILE_CHANGED");
-      return bytes;
-    }
-    async function statLocalFile(file) {
-      let st;
-      try {
-        st = await fs.lstat(file);
-      } catch (_) {
-        return null;
-      }
-      return st.isSymbolicLink() || !st.isFile() ? { regular: false, size: st.size } : { regular: true, size: st.size };
+      return { branch, expectedHead, parent, mergeParent, message, changes };
     }
     function encodeRef(branch) {
       return branch.split("/").map(encodeURIComponent).join("/");
@@ -198,17 +166,8 @@ var require_commit_files = __commonJS({
       }
       return updateRef(ctx, prepared);
     }
-    async function prepare({ plan, api, root, token, local, bad }) {
+    async function prepare({ plan, api, root, token, bad }) {
       const { branch, expectedHead, parent, mergeParent, message, changes } = plan;
-      let total = 0;
-      for (const c of changes.filter((c2) => c2.kind === "local_file")) {
-        const st = await local.stat(c.localFile);
-        if (!st) bad("LOCAL_FILE_UNAVAILABLE");
-        if (!st.regular) bad("LOCAL_FILE_NOT_REGULAR");
-        if (st.size > MAX_LOCAL_FILE_BYTES) bad("LOCAL_FILE_TOO_LARGE");
-        total += st.size;
-        if (total > plan.localTotalLimit) bad("LOCAL_TOTAL_TOO_LARGE");
-      }
       const refRoute = root + "/git/ref/heads/" + encodeRef(branch);
       const readRef = async () => {
         try {
@@ -276,17 +235,6 @@ var require_commit_files = __commonJS({
         if (c.kind === "content_base64") {
           await upload(c.bytes, c.sha);
           entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
-        } else if (c.kind === "local_file") {
-          let bytes;
-          try {
-            bytes = await local.read(c.localFile);
-          } catch (e) {
-            bad(/^LOCAL_FILE_[A-Z_]+$/.test(e?.code || "") ? e.code : "LOCAL_FILE_UNAVAILABLE");
-          }
-          if (gitBlobSha(bytes) !== c.sha) bad("LOCAL_FILE_SHA_MISMATCH");
-          await upload(bytes, c.sha);
-          bytes = null;
-          entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
         } else if (c.kind === "blob_sha") entries.push({ path: c.path, mode: c.mode || "100644", type: "blob", sha: c.sha });
       }
       const tree = await api(root + "/git/trees", token, "POST", { base_tree: baseTree, tree: entries });
@@ -322,8 +270,7 @@ var require_commit_files = __commonJS({
       }
       return result;
     }
-    var defaultLocal = { stat: statLocalFile, read: (file) => readLocalFile(file) };
-    module2.exports = { validateCommitFiles, commitFiles, readLocalFile, statLocalFile, gitBlobSha, defaultLocal, MAX_CHANGES, MAX_LOCAL_FILE_BYTES, MAX_LOCAL_TOTAL_BYTES };
+    module2.exports = { validateCommitFiles, commitFiles, gitBlobSha, MAX_CHANGES };
   }
 });
 
@@ -534,7 +481,7 @@ var require_core = __commonJS({
       if (/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text)) return "QUEUE_HEAD_MISMATCH";
       return "QUEUE_REJECTED";
     }
-    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, local = commitFilesModule.defaultLocal, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
+    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
         let secrets = [], scopeDiagnostics;
@@ -892,7 +839,7 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, local, bad, CoreError }) : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
