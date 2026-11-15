@@ -281,14 +281,17 @@ var require_repository_policy = __commonJS({
     var SIX = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
     var OPTIONAL_REPOSITORIES = Object.freeze(["cindy"]);
-    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
+    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "ad", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "comment_review", qq: "review" });
     var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
     var REVIEW_OPERATIONS = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]);
+    var REVIEWER_OPERATIONS = Object.freeze([...REVIEW_OPERATIONS, "comment_issue"]);
+    var ACCOUNT_RESTRICTIONS = Object.freeze({ ad: Object.freeze({ operations: REVIEWER_OPERATIONS, commentOnly: false, code: "REVIEW_ONLY_ACCOUNT" }) });
     function repositoryRestriction(account, repo) {
+      if (Object.hasOwn(ACCOUNT_RESTRICTIONS, account)) return ACCOUNT_RESTRICTIONS[account];
       if (repo !== "cindy" || !Object.hasOwn(CINDY_ROLES, account) || CINDY_ROLES[account] === "write") return null;
-      return Object.freeze({ operations: REVIEW_OPERATIONS, commentOnly: CINDY_ROLES[account] === "comment_review" });
+      return Object.freeze({ operations: REVIEW_OPERATIONS, commentOnly: CINDY_ROLES[account] === "comment_review", code: "REVIEW_ONLY_REPOSITORY" });
     }
     function invalid() {
       const e = new Error("INVALID_SCOPE_CONFIGURATION");
@@ -338,7 +341,7 @@ var require_repository_policy = __commonJS({
     function initialPolicy() {
       return validatePolicy({ schemaVersion: 1, revision: 0, accounts: Object.fromEntries(ACCOUNT_NAMES.map((a) => [a, baseline(a)])) });
     }
-    module2.exports = { CATALOG, SIX, TWO, OPTIONAL_REPOSITORIES, CINDY_ROLES, CINDY_EXECUTION, REVIEW_OPERATIONS, repositoryRestriction, ACCOUNT_NAMES, initialPolicy, validatePolicy };
+    module2.exports = { CATALOG, SIX, TWO, OPTIONAL_REPOSITORIES, CINDY_ROLES, CINDY_EXECUTION, REVIEW_OPERATIONS, REVIEWER_OPERATIONS, ACCOUNT_RESTRICTIONS, repositoryRestriction, ACCOUNT_NAMES, initialPolicy, validatePolicy };
   }
 });
 
@@ -356,7 +359,7 @@ var require_core = __commonJS({
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
-    var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
+    var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", ad: "ADOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
       ["cindy", 5665939, 179806330],
@@ -369,6 +372,7 @@ var require_core = __commonJS({
       ["rea", 5665948, 179806534],
       ["video", 5665949, 179806582],
       ["vv", 5665951, 179806217],
+      ["ad", 5764947, 182084517],
       ["reviewinbox", 5687106, 180305629]
     ].map(([account, app_id, installation_id]) => [account, Object.freeze({
       account,
@@ -439,11 +443,11 @@ var require_core = __commonJS({
       return n;
     }
     function permissions(a, operation) {
-      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq", "ad"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
     function checkPermissions(actual, a, phase = "execution", operation) {
       const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
-      const pgInstallation = phase === "installation" && a.account === "pg";
+      const pgInstallation = phase === "installation" && ["pg", "ad"].includes(a.account);
       const allowSuperset = a.account === "qq" || pgInstallation;
       if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
       if (!obj(actual) || Object.entries(expected).some(([k, v]) => allowSuperset ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || !allowSuperset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
@@ -544,7 +548,7 @@ var require_core = __commonJS({
           }
           const restriction = repositoryRestriction(account.account, repo);
           if (restriction) {
-            if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
+            if (!restriction.operations.includes(operation)) bad(restriction.code);
             if (restriction.commentOnly && operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
           const root = "/repos/" + OWNER + "/" + repo;
@@ -1064,8 +1068,8 @@ var require_store = __commonJS({
     var { promisify } = require("node:util");
     var runFile = promisify(execFile);
     var { ACCOUNTS, allowedAppSlug } = require_core();
-    var APP_IDS = { bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", reviewinbox: "5687106" };
-    var INSTALL_IDS = { bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", reviewinbox: "180305629" };
+    var APP_IDS = { bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", ad: "5764947", reviewinbox: "5687106" };
+    var INSTALL_IDS = { bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", ad: "182084517", reviewinbox: "180305629" };
     var MAX_PEM = 32768;
     var MAX_STORE = 1048576;
     function failure(code) {
@@ -1230,7 +1234,7 @@ var require_store = __commonJS({
           await checkAcl(file);
           bytes = await plainFile(file, MAX_STORE);
           const doc = JSON.parse(bytes.toString("utf8"));
-          if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > 12) throw Error();
+          if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > Object.keys(APP_IDS).length) throw Error();
           const seen = /* @__PURE__ */ new Set();
           for (const row of doc.accounts) {
             validateRow(row);
@@ -1364,6 +1368,7 @@ var require_deployment = __commonJS({
         "rea",
         "video",
         "vv",
+        "ad",
         "reviewinbox"
       ],
       automaticReviews: false
