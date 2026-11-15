@@ -10,7 +10,7 @@ function fixture(account,options={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
  const execution=account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
  const installation=CATALOG;
- const permissions={contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
+ const permissions={contents:['qq','reviewinbox','ad'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const installPermissions={...permissions,...(account==='pg'?{administration:'write'}:{})};
  const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
  const client=createClient({now:()=>now,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
