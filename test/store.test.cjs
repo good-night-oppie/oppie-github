@@ -38,7 +38,7 @@ test('twelfth ReviewInbox account persists with pinned identity without altering
  const before=JSON.parse(await fs.readFile(store.paths.file,'utf8'));
  const imported=await store.importKey({account:'reviewinbox',pem_path:pemPath,metadata:{appSlug:'reviewinboxoppiexyz'}});
  assert.equal(imported.appId,'5687106');assert.equal(imported.installationId,'180305629');assert.equal(imported.admin,false);
- assert.equal((await store.list()).length,12);assert.equal((await store.load('reviewinbox')).privateKey,pem);
+ assert.equal((await store.list()).length,Object.keys(APP_IDS).length);assert.equal((await store.load('reviewinbox')).privateKey,pem);
  const after=JSON.parse(await fs.readFile(store.paths.file,'utf8'));
  assert.deepEqual(after.accounts.filter(a=>a.account!=='reviewinbox'),before.accounts);
  await assert.rejects(store.importKey({account:'reviewinbox',pem_path:pemPath,replace:true,metadata:{appSlug:'oppie-agent-reviewinbox'}}),/ACCOUNT_METADATA_MISMATCH/);
