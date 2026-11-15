@@ -12,7 +12,7 @@ const NOW=Date.parse('2026-11-10T21:00:00Z');
 const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
 function fixture({account='deja',installation=CATALOG,execution=CATALOG,alterInstallation,alterExecution,repositoryPolicy,beforeCredentials}={}){
  const calls=[];let keyReads=0;
- const permissions={contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
+ const permissions={contents:['qq','reviewinbox','ad'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const client=createClient({now:()=>NOW,repositoryPolicy,credentials:async()=>{keyReads++;await beforeCredentials?.();return PEM;},fetch:async(url,init)=>{
   const path=new URL(url).pathname,body=init.body?JSON.parse(init.body):undefined;calls.push({path,body});let data;
   if(path==='/app')data={id:ACCOUNTS[account].app_id,slug:ACCOUNTS[account].app_slug,owner:{login:'good-night-oppie'}};
