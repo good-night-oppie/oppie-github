@@ -9,12 +9,12 @@ const {initialPolicy,validatePolicy,repositoryRestriction,OPTIONAL_REPOSITORIES}
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
-const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
+const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',ad:'ADOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
 const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['bb',5665927,179806310],['cindy',5665939,179806330],['deja',5665940,179806356],
  ['dd',5665941,179806387],['gg',5665942,179806414],['jj',5665943,179806445],
  ['pg',5665944,179806482],['qq',5665946,179806512],['rea',5665948,179806534],
- ['video',5665949,179806582],['vv',5665951,179806217],['reviewinbox',5687106,180305629],
+ ['video',5665949,179806582],['vv',5665951,179806217],['ad',5764947,182084517],['reviewinbox',5687106,180305629],
 ].map(([account,app_id,installation_id])=>[account,Object.freeze({account,app_id,installation_id,
  app_name:APP_NAMES[account],app_slug:APP_NAMES[account].toLowerCase(),app_slug_status:'expected_not_live',
  allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'})])));
@@ -34,12 +34,15 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 // #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
 // write) requests contents:write, which the QQ installation already holds.
-function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+// #28: ad reviews and comments only, so its execution token never carries contents:write.
+function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':['reviewinbox','qq','ad'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
 function checkPermissions(actual,a,phase='execution',operation){
  const expected=permissions(a,operation),rank={none:0,read:1,write:2};
  // PG may have additional owner-granted installation permissions. Never request
  // or accept them on its ordinary execution token; QQ's existing rules stay unchanged.
- const pgInstallation=phase==='installation'&&a.account==='pg';
+ // #28: AD's installation is also broader than its plugin role (QQ decision on #28); the execution
+ // token is still checked exactly.
+ const pgInstallation=phase==='installation'&&['pg','ad'].includes(a.account);
  const allowSuperset=a.account==='qq'||pgInstallation;
  if(pgInstallation&&(!obj(actual)||Object.keys(expected).some(k=>typeof actual[k]!=='string'||!Object.hasOwn(rank,actual[k]))))bad('PERMISSION_MISMATCH');
  if(!obj(actual)||Object.entries(expected).some(([k,v])=>allowSuperset?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(!allowSuperset&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');
@@ -85,7 +88,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    // #22: on the cindy fork DD and QQ may only read and review; DD reviews are COMMENT only.
    const restriction=repositoryRestriction(account.account,repo);
    if(restriction){
-    if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
+    if(!restriction.operations.includes(operation))bad(restriction.code);
     if(restriction.commentOnly&&operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
    const root='/repos/'+OWNER+'/'+repo;
