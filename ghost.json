@@ -5,7 +5,7 @@
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
   "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 仅作 COMMENT 评审。",
-  "version": "1.5.0-preview.8",
+  "version": "1.5.0-preview.10",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
@@ -243,6 +243,6 @@
       }
     ]
   },
-  "releaseNotes": "候选（#22，按 QQ 审查）：repo 枚举加入 fork good-night-oppie/cindy，作为可选安装仓：App 安装里有没有 cindy 都能用；多出其他仓或缺少必须的仓仍报不匹配；没装 cindy 时只有 cindy 的操作报 REPOSITORY_NOT_INSTALLED。cindy 上：bb/deja 可写分支、文件和 PR；DD 只读，评审仅 COMMENT；QQ 只用审查类操作；其余账号不列入。review queue 不含 cindy，App 权限不变。",
+  "releaseNotes": "候选（#30）：新增操作 request_reviewers {number, reviewers}，只为 PR 请求审查人 GoodNightOppie（MontClip sop-pr-lint 要求）。只调用 POST /pulls/{number}/requested_reviewers，只传 reviewers；名单写死为 GoodNightOppie（大小写精确），不支持 team_reviewers、不支持撤销、不改 PR 其他字段。可用账号：bb、cindy、deja、gg、jj、pg、rea、video、vv；dd、qq、reviewinbox 拒绝。名单外名字、空列表、重复项、多余参数都在读私钥之前拒绝（not_executed）。仓库范围、App 权限和执行令牌权限都不变。",
   "confirm": true
 }
