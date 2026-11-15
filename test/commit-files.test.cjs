@@ -273,11 +273,11 @@ test('an uncertain ref update is read back once and never retried',async()=>{
  assert.equal(c.ok,false);assert.equal(c.execution,'unknown');assert.equal(dark.calls.filter(x=>x.method==='PATCH').length,1);
 });
 
-test('QQ and ReviewInbox cannot author commits; other teammates can',async()=>{
+test('QQ, ReviewInbox and AD cannot author commits; other teammates can',async()=>{
  for(const account of Object.keys(ACCOUNTS)){
   const f=fixture({account});
   const r=await run(f,base(f,{changes:[{path:'a',content_base64:b64('a')}]}),account);
-  if(['qq','reviewinbox'].includes(account)){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
+  if(['qq','reviewinbox','ad'].includes(account)){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
   else assert.equal(r.ok,true,account+JSON.stringify(r));
  }
 });
