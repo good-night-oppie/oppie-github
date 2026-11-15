@@ -10,10 +10,10 @@ const {createQueue,REPOS:QUEUE_REPOS}=require('../node/review-queue.cjs');
 const SIX={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
 const SEVEN={...SIX,cindy:1457433299};
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
-const DESIGN={bb:SEVEN,deja:SEVEN,dd:SEVEN,qq:SEVEN,cindy:SIX,gg:SIX,jj:SIX,pg:SIX,rea:SIX,video:SIX,vv:SIX,reviewinbox:TWO};
+const DESIGN={bb:SEVEN,deja:SEVEN,dd:SEVEN,qq:SEVEN,cindy:SIX,gg:SIX,jj:SIX,pg:SIX,rea:SIX,video:SIX,vv:SIX,ad:SIX,reviewinbox:TWO};
 const WRITERS=['bb','deja'];
 // Token permissions as they were before #22; this change must not alter them.
-const TOKEN_PERMISSIONS=account=>({contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})});
+const TOKEN_PERMISSIONS=account=>({contents:['qq','reviewinbox','ad'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})});
 const SHA='a'.repeat(40),SHA2='b'.repeat(40);
 const ASSISTED='m\n\nAssisted-by: Cindy (https://cindy.app)';
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
