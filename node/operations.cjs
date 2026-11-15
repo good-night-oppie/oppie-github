@@ -13,6 +13,7 @@ module.exports={
  pull_files:'{number:integer,page?:integer,per_page?:1..100}',
  create_pull:'{title:string,head:string,base:string,body?:string,draft?:boolean}',
  update_pull:'{number:integer,title?:string,body?:string,state?:open|closed}',
+ request_reviewers:'{number:integer,reviewers:["GoodNightOppie"]}; only POST /pulls/{number}/requested_reviewers with the reviewers field; reviewer allowlist is exactly GoodNightOppie (case-sensitive, no duplicates); no team_reviewers, no removal, no other PR fields; accounts bb, cindy, deja, gg, jj, pg, rea, video, vv only (dd, qq and reviewinbox are refused); other names, empty lists and extra arguments are refused before credentials (not_executed); do not retry an unknown outcome, read the PR back',
  list_reviews:'{number:integer,page?:integer,per_page?:1..100}',
  submit_review:'{number:integer,commit_id:40hex,event:COMMENT|APPROVE|REQUEST_CHANGES,body:string,comments?:array}; checks live head; do not retry unknown outcome. Automatic review uses COMMENT only.',
  create_branch:'{branch:string,sha:40hex}; never writes the default branch',
