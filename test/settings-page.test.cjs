@@ -252,15 +252,15 @@ test('signed configuration: deleting both files after a save fails closed; never
  fs.unlinkSync(path.join(root,'scope-config-audit.jsonl'));
  assert.equal((await loader()).accounts.includes('gg'),true);
 });
-// BB (#29 vs #33): the card states the reviewer role, an accepted broader installation and the
-// repositories the owner made unusable for the account (e.g. cindy for AD).
-test('confirmation summary shows reviewer role, broader installation and unusable repositories',()=>{
+// BB (#29 vs #33): the card states the reviewer role and the repositories the owner made
+// unusable for the account (e.g. cindy for AD).
+test('confirmation summary shows reviewer role and unusable repositories',()=>{
  const {summarize}=require('../node/scope-settings.cjs');
  const before=validateConfig({});
- const after=validateConfig({newAccounts:{ad:{...AD,role:'reviewer',allowBroaderInstallation:true}},repositoryRoles:{...before.repositoryRoles,cindy:{...before.repositoryRoles.cindy,ad:'none'}}});
+ const after=validateConfig({newAccounts:{ad:{...AD,role:'reviewer'}},repositoryRoles:{...before.repositoryRoles,cindy:{...before.repositoryRoles.cindy,ad:'none'}}});
  const s=summarize(before,after);
- assert.match(s,/加账号 ad\(App 5764947\/安装 182084517\/adoppiexyz\/只读\+评论\+评审\/安装权限可更宽\/不可用 cindy\)/);
+ assert.match(s,/加账号 ad\(App 5764947\/安装 182084517\/adoppiexyz\/只读\+评论\+评审\/不可用 cindy\)/);
  assert.ok(('保存伙伴 GitHub 配置 r0→r1：'+s).length<=300,s.length);
- const repo=summarize(after,validateConfig({...after,schemaVersion:undefined,revision:undefined,newAccounts:{ad:{...AD,role:'reviewer',allowBroaderInstallation:true}},repositories:{...after.repositories,'x-repo':1777777777},optionalRepositories:['cindy','x-repo'],repositoryRoles:{...after.repositoryRoles,'x-repo':{ad:'none'}}}));
+ const repo=summarize(after,validateConfig({...after,schemaVersion:undefined,revision:undefined,newAccounts:{ad:{...AD,role:'reviewer'}},repositories:{...after.repositories,'x-repo':1777777777},optionalRepositories:['cindy','x-repo'],repositoryRoles:{...after.repositoryRoles,'x-repo':{ad:'none'}}}));
  assert.match(repo,/x-repo#1777777777（.*；不可用：ad；/);
 });
