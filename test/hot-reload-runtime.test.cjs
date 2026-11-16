@@ -56,25 +56,23 @@ test('same worker process: deployment.json account edits and settings saves appl
  assert.equal((await call('review',{action:'bogus'})).errorCode,'AUTOMATION_DISABLED_BY_OWNER');
  writeDeployment({accounts:['deja','bb'],automaticReviews:false});
  assert.equal((await call('accounts')).scopeConfig.source,'default');
- // 3. Settings page: add AD and a repository; the next call uses them.
+ // 3. Settings page: add AD (identity only); the next call uses it. Repositories are not listed
+ // locally any more (owner 2026-11-16): GitHub decides, so any well-formed name reaches the key step.
  assert.equal((await run('ad')).errorCode,'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST');
- assert.equal((await run('deja','new-repo')).errorCode,'REPOSITORY_NOT_ALLOWED');
  const read=await call('settings/read');assert.equal(read.ok,true);assert.equal(read.revision,0);
  const {schemaVersion,revision,...base}=read.config;
- const config={...base,accounts:[...base.accounts,'ad'],newAccounts:{ad:{appId:5764947,installationId:182084517,appName:'ADOppieXYZ',role:'review'}},repositories:{...base.repositories,'new-repo':1999999999},optionalRepositories:[...base.optionalRepositories,'new-repo']};
+ const config={...base,accounts:[...base.accounts,'ad'],newAccounts:{ad:{appId:5764947,appName:'ADOppieXYZ'}}};
  const plan=await call('settings/propose',{config,expectedRevision:0});assert.equal(plan.ok,true,plan.errorCode);
  const saved=await call('settings/save',{config,expectedRevision:0,hash:plan.hash});assert.equal(saved.ok,true,saved.errorCode);assert.equal(saved.revision,1);
  assert.deepEqual(await accounts(),['ad','bb','deja']);
  assert.equal((await call('accounts')).scopeConfig.source,'file');
  const ad=await run('ad');assert.ok(!['ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST','ACCOUNT_REQUIRED'].includes(ad.errorCode),ad.errorCode);
  assert.notEqual((await run('deja','new-repo')).errorCode,'REPOSITORY_NOT_ALLOWED');
- // 4. Removing a repository and an account in the settings page also applies on the next call.
+ // 4. Disabling an account in the settings page also applies on the next call.
  const read2=await call('settings/read');const {schemaVersion:_s,revision:_r,...base2}=read2.config;
- const {'new-repo':_gone,...repos2}=base2.repositories;
- const config2={...base2,repositories:repos2,optionalRepositories:base2.optionalRepositories.filter(n=>n!=='new-repo'),accounts:base2.accounts.filter(a=>a!=='ad')};
+ const config2={...base2,accounts:base2.accounts.filter(a=>a!=='ad')};
  const plan2=await call('settings/propose',{config:config2,expectedRevision:1});assert.equal(plan2.ok,true,plan2.errorCode);
  assert.equal((await call('settings/save',{config:config2,expectedRevision:1,hash:plan2.hash})).ok,true);
- assert.equal((await run('deja','new-repo')).errorCode,'REPOSITORY_NOT_ALLOWED');
  assert.equal((await run('ad')).errorCode,'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST');
  // 5. A broken deployment.json fails closed on the next call and recovers when fixed.
  writeDeployment('{broken');
