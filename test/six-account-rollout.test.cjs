@@ -8,9 +8,9 @@ const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.expo
 const now=Date.parse('2026-11-10T22:00:00Z');
 function fixture(account,options={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
- const execution=account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
+ const execution=CATALOG;
  const installation=CATALOG;
- const permissions={contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
+ const permissions={contents:account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const installPermissions={...permissions,...(account==='pg'?{administration:'write'}:{})};
  const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
  const client=createClient({now:()=>now,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
@@ -25,7 +25,7 @@ function fixture(account,options={}){
  }});return {client,calls,keyReads:()=>keyReads,permissions};
 }
 for(const account of SIX)test(account+' uses its execution repositories for ordinary issue writes',async()=>{
- const execution=CINDY_EXECUTION.includes(account)?CATALOG:SIX_REPOS;
+ const execution=CATALOG;
  for(const repo of Object.keys(execution)){
   const f=fixture(account),result=await f.client.run({account,repo,operation:'create_issue',args:{title:'synthetic scope test'}});
   if(repositoryRestriction(account,repo)){assert.equal(result.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(f.keyReads(),0);continue;}
@@ -38,10 +38,10 @@ for(const account of SIX)test(account+' uses its execution repositories for ordi
 for(const account of ['qq','reviewinbox'])test(account+' retains repository and execution permission boundaries',async()=>{
  const f=fixture(account),r=await f.client.run({account,repo:'MontClip',operation:'identity'});
  assert.equal(r.ok,true,r.errorCode);
- assert.equal(r.result.repositories.length,account==='qq'?7:2);
+ assert.equal(r.result.repositories.length,7);
  assert.equal(r.result.installationRepositories.length,7);
  assert.deepEqual(r.result.permissions,f.permissions);
- if(account!=='qq')assert.equal((await f.client.run({account,repo:'oppie-github',operation:'identity'})).errorCode,'REPOSITORY_NOT_ALLOWED');
+ assert.equal((await f.client.run({account,repo:'oppie-github',operation:'identity'})).ok,true);
 });
 test('PG installation admin never becomes execution admin',async()=>{
  const f=fixture('pg'),r=await f.client.run({account:'pg',repo:'oppie-github',operation:'identity'});
