@@ -14,14 +14,17 @@ const PERMS=a=>({contents:a==='qq'?'read':'write',issues:'write',pull_requests:'
 const row=(name,id)=>({id,name,full_name:'good-night-oppie/'+name});
 // An "all repositories" organisation listing: the configured seven plus many strangers.
 function orgRepos(extra=243){const list=Object.entries(SEVEN).map(([n,i])=>row(n,i));for(let i=0;i<extra;i++)list.push(row('stranger-'+i,2000000000+i));return list;}
-function fixture(account,{selection='all',listing=orgRepos(),pageTotal,scopeConfig,appId,installationId,slug}={}){
+// AD's real installation is broader than its role (BB on #29: secrets, workflows, actions, hooks write).
+const AD_REVIEW_INSTALL={contents:'read',issues:'write',pull_requests:'write',metadata:'read'};
+const AD_BROAD_INSTALL={contents:'write',issues:'write',pull_requests:'write',metadata:'read',secrets:'write',workflows:'write',actions:'write',repository_hooks:'write',administration:'read'};
+function fixture(account,{selection='all',listing=orgRepos(),pageTotal,scopeConfig,appId,installationId,slug,installPerms,tokenPerms}={}){
  const a=account==='ad'?{app_id:appId??5764947,installation_id:installationId??182084517,app_slug:slug??'adoppiexyz'}:ACCOUNTS[account];
  const calls=[];let keyReads=0,requested;
  const client=createClient({now:()=>now,scopeConfig,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
   const u=new URL(url),route=u.pathname,method=init.method||'GET',body=init.body?JSON.parse(init.body):null;calls.push({route,method,body,query:u.search});let data;
   if(route==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
-  else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:selection,permissions:PERMS(account)};
-  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?PERMS(account):{metadata:'read'}};}
+  else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:selection,permissions:installPerms??(account==='ad'?AD_REVIEW_INSTALL:PERMS(account))};
+  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?(tokenPerms??body.permissions):{metadata:'read'}};}
   else if(route==='/installation/repositories'){
    if(init.headers.Authorization==='Bearer probe'){const page=Number(u.searchParams.get('page')||1),per=Number(u.searchParams.get('per_page'));data={total_count:pageTotal?pageTotal(page):listing.length,repositories:listing.slice((page-1)*per,page*per)};}
    else{const l=listing.filter(r=>requested.includes(r.id));data={total_count:l.length,repositories:l};}
@@ -139,7 +142,7 @@ test('a new account (AD) from configuration: pinned App identity, review-only by
  const slug=fixture('ad',{scopeConfig:()=>cfg,slug:'dejaoppiexyz'});assert.equal((await run(slug,'ad','identity')).errorCode,'APP_IDENTITY_MISMATCH');
  // Explicit write role.
  const cw=validateConfig({newAccounts:{ad:{appId:5764947,installationId:182084517,appName:'ADOppieXYZ',role:'write'}}});
- assert.equal((await run(fixture('ad',{scopeConfig:()=>cw}),'ad','create_branch',{branch:'ad/x',sha:SHA})).ok,true);
+ assert.equal((await run(fixture('ad',{scopeConfig:()=>cw,installPerms:PERMS('bb')}),'ad','create_branch',{branch:'ad/x',sha:SHA})).ok,true);
  const cc=validateConfig({newAccounts:{ad:{appId:5764947,installationId:182084517,appName:'ADOppieXYZ',role:'comment_review'}}});
  assert.equal((await run(fixture('ad',{scopeConfig:()=>cc}),'ad','submit_review',{number:320,commit_id:SHA,event:'APPROVE',body:'x'})).errorCode,'COMMENT_ONLY_REVIEWER');
 });
@@ -154,4 +157,66 @@ test('repositoryRoles and reviewOperations from configuration are enforced',asyn
  assert.equal((await run(fixture('bb',{scopeConfig:()=>cfg}),'bb','get_pull',{number:320})).ok,true);
  assert.equal((await run(fixture('bb',{scopeConfig:()=>cfg}),'bb','list_issues')).errorCode,'REVIEW_ONLY_REPOSITORY');
  assert.equal((await run(fixture('bb',{scopeConfig:()=>cfg}),'bb','create_branch',{branch:'b/x',sha:SHA},'MontClip-Cindy')).ok,true);
+});
+
+// BB's comparison of #29 and #33 (2026-11-16): what AD needs to work when the owner adds it in the settings page.
+const AD={appId:5764947,installationId:182084517,appName:'ADOppieXYZ'};
+const adCfg=(extra={},rest={})=>validateConfig({newAccounts:{ad:{...AD,...extra}},...rest});
+const tokenRequest=f=>f.calls.filter(c=>c.route.endsWith('/access_tokens')&&c.body.repository_ids).at(-1).body;
+test('AD item 1: a broader installation is accepted only when the owner allows it; the execution token stays exact',async()=>{
+ const strict=adCfg({role:'reviewer'});
+ assert.equal((await run(fixture('ad',{scopeConfig:()=>strict,installPerms:AD_BROAD_INSTALL}),'ad','identity')).errorCode,'PERMISSION_MISMATCH');
+ const broad=adCfg({role:'reviewer',allowBroaderInstallation:true});
+ const f=fixture('ad',{scopeConfig:()=>broad,installPerms:AD_BROAD_INSTALL}),r=await run(f,'ad','identity');
+ assert.equal(r.ok,true,r.errorCode);
+ assert.deepEqual(tokenRequest(f).permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
+ // The minted token must equal the request: any extra or stronger permission is refused.
+ for(const extra of [{contents:'write'},{secrets:'write'},{workflows:'write'},{administration:'read'},{issues:'read'}]){
+  const g=fixture('ad',{scopeConfig:()=>broad,installPerms:AD_BROAD_INSTALL,tokenPerms:{contents:'read',issues:'write',pull_requests:'write',metadata:'read',...extra}});
+  assert.equal((await run(g,'ad','get_pull',{number:320})).errorCode,'PERMISSION_MISMATCH',JSON.stringify(extra));
+ }
+ // A broader installation must still contain every level the role needs.
+ const missing=fixture('ad',{scopeConfig:()=>broad,installPerms:{...AD_BROAD_INSTALL,issues:'read'}});
+ assert.equal((await run(missing,'ad','identity')).errorCode,'PERMISSION_MISMATCH');
+ assert.throws(()=>adCfg({allowBroaderInstallation:'yes'}),{code:'INVALID_SCOPE_CONFIGURATION'});
+});
+test('AD item 2: a configured account that cannot write contents requests contents:read',async()=>{
+ for(const role of ['review','reviewer','comment_review']){
+  const f=fixture('ad',{scopeConfig:()=>adCfg({role})});assert.equal((await run(f,'ad','get_pull',{number:320})).ok,true,role);
+  assert.equal(tokenRequest(f).permissions.contents,'read',role);
+ }
+ const w=fixture('ad',{scopeConfig:()=>adCfg({role:'write'}),installPerms:PERMS('bb')});await run(w,'ad','get_pull',{number:320});
+ assert.equal(tokenRequest(w).permissions.contents,'write');
+ // Write role limited to operations that never touch contents: still contents:read.
+ const ops=fixture('ad',{scopeConfig:()=>adCfg({role:'write',operations:['identity','get_pull','comment_issue','create_pull']})});
+ assert.equal((await run(ops,'ad','get_pull',{number:320})).ok,true);assert.equal(tokenRequest(ops).permissions.contents,'read');
+ // A reviewer given write on one repository by the owner needs contents:write.
+ const perRepo=fixture('ad',{scopeConfig:()=>adCfg({role:'reviewer'},{repositoryRoles:{cindy:{bb:'write',deja:'write',dd:'write',qq:'write'},MontClip:{ad:'write'}}}),installPerms:PERMS('bb')});
+ assert.equal((await run(perRepo,'ad','create_branch',{branch:'ad/x',sha:SHA})).ok,true);assert.equal(tokenRequest(perRepo).permissions.contents,'write');
+});
+test('AD item 3: the reviewer role reads, comments and submits any review event, and nothing else',async()=>{
+ const cfg=adCfg({role:'reviewer'});
+ assert.equal((await run(fixture('ad',{scopeConfig:()=>cfg}),'ad','comment_issue',{number:320,body:'x'})).ok,true);
+ for(const event of ['COMMENT','APPROVE','REQUEST_CHANGES'])assert.equal((await run(fixture('ad',{scopeConfig:()=>cfg}),'ad','submit_review',{number:320,commit_id:SHA,event,body:'x'})).ok,true,event);
+ for(const [operation,args] of [['create_branch',{branch:'ad/x',sha:SHA}],['create_issue',{title:'t'}],['update_pull',{number:320,title:'t'}],['create_pull',{title:'t',head:'a',base:'main'}]]){
+  const f=fixture('ad',{scopeConfig:()=>cfg});const r=await run(f,'ad',operation,args);
+  assert.equal(r.errorCode,'REVIEW_ONLY_REPOSITORY',operation);assert.equal(f.keyReads(),0);
+ }
+ // The plain review role still cannot comment.
+ assert.equal((await run(fixture('ad',{scopeConfig:()=>adCfg({role:'review'})}),'ad','comment_issue',{number:320,body:'x'})).errorCode,'REVIEW_ONLY_REPOSITORY');
+});
+test('AD item 4: whether AD may use cindy is the owner setting (repository role none), not code',async()=>{
+ const roles={cindy:{bb:'write',deja:'write',dd:'write',qq:'write'}};
+ const allowed=fixture('ad',{scopeConfig:()=>adCfg({role:'reviewer'},{repositoryRoles:roles})});
+ assert.equal((await run(allowed,'ad','get_pull',{number:320},'cindy')).ok,true);
+ assert.ok(tokenRequest(allowed).repository_ids.includes(SEVEN.cindy));
+ const blockedCfg=adCfg({role:'reviewer'},{repositoryRoles:{cindy:{...roles.cindy,ad:'none'}}});
+ const blocked=fixture('ad',{scopeConfig:()=>blockedCfg});const r=await run(blocked,'ad','get_pull',{number:320},'cindy');
+ assert.equal(r.errorCode,'REPOSITORY_NOT_ALLOWED');assert.equal(blocked.keyReads(),0);
+ const other=fixture('ad',{scopeConfig:()=>blockedCfg});assert.equal((await run(other,'ad','get_pull',{number:320})).ok,true);
+ assert.ok(!tokenRequest(other).repository_ids.includes(SEVEN.cindy),'cindy never reaches AD tokens');
+ // 'none' is only a repository role, and an account must keep at least one repository.
+ assert.throws(()=>adCfg({role:'none'}),{code:'INVALID_SCOPE_CONFIGURATION'});
+ const all=Object.fromEntries(Object.keys(SEVEN).map(n=>[n,{ad:'none'}]));
+ assert.throws(()=>adCfg({role:'reviewer'},{repositoryRoles:all}),{code:'INVALID_SCOPE_CONFIGURATION'});
 });
