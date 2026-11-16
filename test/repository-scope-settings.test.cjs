@@ -17,7 +17,7 @@ function fixture({account='deja',installation=CATALOG,execution=CATALOG,alterIns
   const path=new URL(url).pathname,body=init.body?JSON.parse(init.body):undefined;calls.push({path,body});let data;
   if(path==='/app')data={id:ACCOUNTS[account].app_id,slug:ACCOUNTS[account].app_slug,owner:{login:'good-night-oppie'}};
   else if(path==='/app/installations/'+ACCOUNTS[account].installation_id)data={id:ACCOUNTS[account].installation_id,app_id:ACCOUNTS[account].app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',permissions:{...permissions,...(account==='pg'?{administration:'write'}:{})}};
-  else if(path.endsWith('/access_tokens'))data={token:body.repository_ids?'execution-token':'probe-token',expires_at:new Date(NOW+600000).toISOString(),permissions};
+  else if(path.endsWith('/access_tokens'))data={token:body.repository_ids?'execution-token':'probe-token',expires_at:new Date(NOW+600000).toISOString(),permissions:body.permissions||permissions};
   else if(path==='/installation/repositories')data=init.headers.Authorization==='Bearer probe-token'?(alterInstallation||rows(installation)):(alterExecution||rows(execution));
   else throw Error('Unexpected business request');
   return {ok:true,status:200,text:async()=>JSON.stringify(data)};
