@@ -816,9 +816,10 @@ var require_core = __commonJS({
           const shown = (v) => typeof v === "string" || Number.isSafeInteger(v) ? String(v).slice(0, 100) : v === void 0 || v === null ? "missing" : "invalid";
           checksFailed("APP_IDENTITY_MISMATCH", [
             { check: "app_id", expected: String(account.app_id), actual: shown(app?.id), ok: Number(app?.id) === account.app_id },
-            { check: "app_slug", expected: account.allowed_slugs.join(" or "), actual: shown(app?.slug), ok: typeof app?.slug === "string" && account.allowed_slugs.includes(app.slug) },
             { check: "app_owner", expected: OWNER, actual: shown(app?.owner?.login), ok: app?.owner?.login === OWNER }
           ]);
+          const warnings = typeof app?.slug === "string" && account.allowed_slugs.includes(app.slug) ? [] : [{ check: "app_slug", expected: account.allowed_slugs.join(" or "), actual: shown(app?.slug) }];
+          const warned = warnings.length ? { warnings } : {};
           let installation;
           if (account.installation_id) installation = await api("/app/installations/" + account.installation_id, jwt);
           else {
@@ -865,9 +866,10 @@ var require_core = __commonJS({
             availableOperations: OPERATION_NAMES.filter((o) => !missingPermissions(installation.permissions, permissions(o)).length),
             scopeRevision: config.revision,
             scopeConfigSource: config === DEFAULT_CONFIG ? "default" : "file",
-            scopeConfigDigest: configDigest(config)
+            scopeConfigDigest: configDigest(config),
+            ...warned
           });
-          if (repo === null) return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: null, operation, execution: "completed", url: app.html_url }, result: clean({ ...installationSummary(), installationRepositories: await listInstallation() }, secrets) };
+          if (repo === null) return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: null, operation, execution: "completed", url: app.html_url, ...warned }, result: clean({ ...installationSummary(), installationRepositories: await listInstallation() }, secrets) };
           const proofRepo = preflight?.kind === "owner_reference" ? preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1] : null;
           if (preflight?.kind === "owner_reference" && (!proofRepo || ![repo, "MontClip"].includes(proofRepo))) bad("OWNER_REFERENCE_SCOPE");
           const tokenRepos = [.../* @__PURE__ */ new Set([repo, ...proofRepo ? [proofRepo] : []])];
@@ -1009,7 +1011,7 @@ var require_core = __commonJS({
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
           const result = operation === "identity" ? { ...installationSummary(), repository: { id: target.id, full_name: target.full_name }, installationRepositories: await listInstallation(), expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
-          return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
+          return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url, ...warned }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
         } finally {
