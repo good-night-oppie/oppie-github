@@ -170,7 +170,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'dismiss_review':exact(args,['number','review_id','message']);method='PUT';route=root+'/pulls/'+number()+'/reviews/'+positive(args.review_id)+'/dismissals';body={message:nonempty(args.message,1000)};break;
     case 'enqueue_pull':exact(args,['number','commit_id']);preflight={kind:'enqueue',number:number(),sha:sha(args.commit_id)};method='POST';route='/graphql';break;
     case 'admin_get':exact(args,[]);route=root;break;
-    case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();method='PATCH';route=root;body={...args};break;
+    case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();
+     // ADR 0003 section 4 (Deja 2026-11-16): repository merge settings need a host confirmation each
+     // time, whichever account runs them; checked before the private key is read.
+     if(!await authorize({account:account.account,repo,operation,args}))bad('OWNER_CONFIRMATION_REQUIRED');
+     method='PATCH';route=root;body={...args};break;
    }
    async function api(path,token,method='GET',payload,maxResponseBytes=2500000,timeoutMs=30000){
     if(!path.startsWith('/')||path.startsWith('//')||/[\r\n\\]/.test(path))bad('INVALID_API_ROUTE');
