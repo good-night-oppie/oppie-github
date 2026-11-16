@@ -7,12 +7,12 @@ const crypto=require('node:crypto');
 const fs=require('node:fs');
 const path=require('node:path');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const {CATALOG}=require('../node/repository-policy.cjs');
 const {gitBlobSha}=require('../node/commit-files.cjs');
 const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
-const repos={total_count:Object.keys(CATALOG).length,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const INSTALLED=['MontClip','MontClip-Cindy','oppie-github','cindy'];
+const listed=names=>({total_count:names.length,repositories:names.map(name=>({id:1000+INSTALLED.indexOf(name),name,full_name:'good-night-oppie/'+name}))});
 const ROOT='/repos/good-night-oppie/MontClip';
 const MSG='Change files\n\nAssisted-by: Cindy (https://cindy.app)';
 const fakeSha=x=>crypto.createHash('sha1').update(JSON.stringify(x)).digest('hex');
@@ -50,7 +50,7 @@ function seed(){
 function fixture(options={}){
  const {git,head}=options.seeded||seed();
  const account=ACCOUNTS[options.account||'deja'];
- const perms={contents:account.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read'};
+ const perms={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
  const calls=[];let counter=0;const tokenRepositories=new Map();
  const reply=(data,status=200)=>({ok:status>=200&&status<300,status,text:async()=>JSON.stringify(data)});
  const fetch=async(url,init)=>{
@@ -58,8 +58,8 @@ function fixture(options={}){
   calls.push({path:p,method:init.method,body,signal:init.signal});
   if(options.override){const out=await options.override(p,init,body,git);if(out){if(out.throw)throw Error('network');return reply(out.data,out.status);}}
   if(p==='/app')return reply({id:account.app_id,slug:account.app_slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/x'});
-  if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:{...perms,...(account.admin?{administration:'write'}:{})}});
-  if(p.endsWith('/access_tokens')){const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:body.permissions||{...perms,...(account.admin?{administration:'write'}:{})}};const ids=body.repository_ids;tokenRepositories.set('Bearer '+t.token,ids?{total_count:ids.length,repositories:repos.repositories.filter(r=>ids.includes(r.id))}:repos);return reply(t);}
+  if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:perms});
+  if(p.endsWith('/access_tokens')){const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:body.permissions};tokenRepositories.set('Bearer '+t.token,listed(body.repositories||INSTALLED));return reply(t);}
   if(p==='/installation/repositories')return reply(tokenRepositories.get(init.headers.Authorization));
   if(p===ROOT)return reply({default_branch:'main'});
   if(p.startsWith(ROOT+'/git/ref/heads/')){const b=p.slice((ROOT+'/git/ref/heads/').length);return git.refs.has(b)?reply({ref:'refs/heads/'+b,object:{type:'commit',sha:git.refs.get(b)}}):reply({message:'Not Found'},404);}
@@ -273,12 +273,13 @@ test('an uncertain ref update is read back once and never retried',async()=>{
  assert.equal(c.ok,false);assert.equal(c.execution,'unknown');assert.equal(dark.calls.filter(x=>x.method==='PATCH').length,1);
 });
 
-test('QQ cannot author commits; all other teammates including ReviewInbox can',async()=>{
+// Owner 2026-11-16: no plugin-side roles; the installation decides (all twelve have contents:write here).
+test('every teammate whose installation has contents:write can commit, with a single-repository contents:write token',async()=>{
  for(const account of Object.keys(ACCOUNTS)){
   const f=fixture({account});
   const r=await run(f,base(f,{changes:[{path:'a',content_base64:b64('a')}]}),account);
-  if(account==='qq'){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
-  else assert.equal(r.ok,true,account+JSON.stringify(r));
+  assert.equal(r.ok,true,account+JSON.stringify(r));
+  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.body),[{repositories:['MontClip'],permissions:{metadata:'read',contents:'write'}}],account);
  }
 });
 
