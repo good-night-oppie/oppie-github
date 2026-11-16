@@ -50,7 +50,7 @@ function seed(){
 function fixture(options={}){
  const {git,head}=options.seeded||seed();
  const account=ACCOUNTS[options.account||'deja'];
- const perms={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
+ const perms=options.perms||{contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
  const calls=[];let counter=0;const tokenRepositories=new Map();
  const reply=(data,status=200)=>({ok:status>=200&&status<300,status,text:async()=>JSON.stringify(data)});
  const fetch=async(url,init)=>{
@@ -288,4 +288,33 @@ test('commit_files is advertised and treated as a write by the host bridge',()=>
  assert.match(operations.commit_files,/expected_head/);
  const main=fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8');
  assert.equal(/READ_ONLY_OPERATIONS=new Set\([^)]*commit_files/.test(main),false);
+});
+
+// Deja 2026-11-16 (#33): files under .github/workflows/ need workflows:write on the token. The
+// token asks for it only when the change touches such a path and the installation holds it.
+const WF_PERMS={contents:'write',issues:'write',pull_requests:'write',metadata:'read',workflows:'write'};
+const tokenRequests=f=>f.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.body?.repositories).map(c=>c.body.permissions);
+test('commit_files touching .github/workflows/ requests workflows:write when the installation has it',async()=>{
+ const f=fixture({perms:WF_PERMS});
+ const r=await run(f,base(f,{changes:[{path:'.github/workflows/test.yml',content_base64:b64('on: [merge_group]')},{path:'README.md',content_base64:b64('x')}]}));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(tokenRequests(f),[{metadata:'read',contents:'write',workflows:'write'}]);
+});
+test('commit_files touching .github/workflows/ without the workflows permission fails in plain words before any write',async()=>{
+ for(const change of [{path:'.github/workflows/test.yml',content_base64:b64('x')},{path:'.github/workflows/old.yml',delete:true},{path:'ci/test.yml',from:'.github/workflows/test.yml'}]){
+  const f=fixture();
+  const r=await run(f,base(f,{changes:[change]}));
+  assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(r.execution,'not_executed');
+  assert.deepEqual(r.details.missing,[{permission:'workflows',required:'write',installed:'none'}]);
+  assert.deepEqual(r.details.workflowFiles,[change.from||change.path]);
+  assert.equal(tokenRequests(f).length,0);assert.equal(f.writes().length,0);
+  const said=require('../node/messages.cjs').explain(r).message;
+  assert.match(said,/workflows:write/);assert.ok(said.includes('.github/workflows/'));assert.ok(said.includes('/settings/apps/')&&said.includes('/permissions'));
+ }
+});
+test('commit_files outside .github/workflows/ never asks for workflows, even when the installation has it',async()=>{
+ const f=fixture({perms:WF_PERMS});
+ const r=await run(f,base(f,{changes:[{path:'docs/github/workflows.md',content_base64:b64('x')},{path:'github/workflows/a.yml',content_base64:b64('x')}]}));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(tokenRequests(f),[{metadata:'read',contents:'write'}]);
 });
