@@ -27,7 +27,7 @@ Retain the receipt's App slug, installation ID, repository, object URL and confi
 
 ## Installation and scope failures
 
-- `INSTALLATION_PERMISSION_MISSING`: the App installation lacks a level the operation needs. `details.missing` and `details.fix` name it and the two links show where the owner adds it. Report that to the owner; do not switch accounts to get around it.
+- `INSTALLATION_PERMISSION_MISSING`: the App installation lacks a level the operation needs. `details.missing` and `details.fix` name it and the two links show where the owner adds it. Report that to the owner; do not switch accounts to get around it. With `details.workflowFiles` the change touches `.github/workflows/` and the App needs `workflows:write`.
 - `REPOSITORY_NOT_INSTALLED`: the target repository is not in the App installation. Only the owner can add it on GitHub.
 - `INSTALLATION_NOT_FOUND`: a settings-page account's App has no single installation in good-night-oppie.
 - `TOKEN_PERMISSION_MISMATCH` or `EXECUTION_REPOSITORY_SCOPE_MISMATCH`: GitHub returned a token that differs from the request (permissions or repositories). Nothing ran; report the diagnostics.
