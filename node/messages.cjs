@@ -16,15 +16,17 @@ const CATALOG=Object.freeze({
  ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST:E('这台机器的 deployment.json 没有启用这个账号。',OWNER,'在这台机器的 deployment.json 里加上这个账号，或换一台已启用它的机器。'),
  ACCOUNT_NOT_CONNECTED:E('这台机器上还没有导入这个账号的私钥。',OWNER,'在插件设置页为这个账号导入私钥。'),
  ACCOUNT_EXISTS:E('这个账号在这台机器上已经有私钥。',OWNER,'要替换就勾选「替换已保存的私钥」后重新导入。'),
+ KEY_IMPORTED_FOR_OTHER_APP:E('本机为这个账号存的私钥是给另一个 App 导入的（例如设置页改过 App ID），只停这一个账号，其他账号照常。',OWNER,'在设置页为这个账号重新导入它现在这个 App 的私钥。'),
  ACCOUNT_METADATA_MISMATCH:E('已保存私钥的元数据和账号配置对不上（例如 App 名变了）。',OWNER,'在设置页重新导入这个账号的私钥。'),
  // Repository scope
  REPOSITORY_REQUIRED:E('调用里没有写 repo。',CALLER,'写明目标仓库名，例如 MontClip。'),
  REPOSITORY_NOT_ALLOWED:E('仓库名格式不对（只写 good-night-oppie 下的仓库名，不带别的组织）。',CALLER,'改成正确的仓库名，例如 MontClip。'),
  REPOSITORY_NOT_INSTALLED:E('这个 App 在 GitHub 上的安装里没有目标仓库（或仓库不存在），没有执行。',OWNER,'确认仓库名没写错；要让这个伙伴用它，请主人在 GitHub 组织设置里把仓库加进该 App 的安装。'),
+ REPOSITORY_RESOLUTION_FAILED:E('把仓库名解析成仓库 ID 时没对上（不在 good-night-oppie 下，或 GitHub 返回的记录不完整），没有申请执行令牌，没有执行。',CALLER,'核对仓库名；确认是 good-night-oppie 下的仓库后重试，仍出现就报维护者。'),
  EXECUTION_REPOSITORY_SCOPE_MISMATCH:E('GitHub 发的令牌覆盖的仓库和申请的不一致，已丢弃，没有执行。',MAINT,'对照 diagnostics 排查；通常是 GitHub 侧仓库刚变动，稍后重试一次，仍不对就报维护者。'),
  // App, installation, permissions
  APP_IDENTITY_MISMATCH:E('GitHub 返回的 App 身份和配置对不上。',OWNER,'核对没对上的那一项：App ID 或 slug 填错就在设置页改正；私钥导错了 App 就重新导入正确的私钥。'),
- INSTALLATION_MISMATCH:E('App 的安装信息和配置对不上。',OWNER,'按没对上的那一项处理：安装 ID 填错就在设置页改正；安装不在 good-night-oppie 组织下或被暂停，就到 GitHub 组织设置里恢复。'),
+ INSTALLATION_MISMATCH:E('App 的安装信息和配置对不上。',OWNER,'按没对上的那一项处理：安装不在 good-night-oppie 组织下或被暂停，就到 GitHub 组织设置里恢复；内置账号的固定安装 ID 和 GitHub 不一致，就报维护者。'),
  INSTALLATION_NOT_FOUND:E('这个 App 在 good-night-oppie 组织里没有安装，或有不止一个安装，没有执行。',OWNER,'到 GitHub 把这个 App 安装到 good-night-oppie 组织（只保留一个安装），再重试。'),
  TOKEN_PERMISSION_MISMATCH:E('GitHub 发的令牌权限和这次申请的不完全一样（多给、强一级或少给），已丢弃，没有执行。',MAINT,'稍后重试一次；仍出现就报维护者，附上 details 里的申请和实际权限。'),
  INSTALLATION_PERMISSION_MISSING:E('App 的安装缺少这次操作需要的权限。',OWNER,'在 App 设置的 Permissions 里加上缺的权限，再到组织的安装页接受权限更新。'),
@@ -40,7 +42,7 @@ const CATALOG=Object.freeze({
  INVALID_IMPORT:E('导入参数不对（账号不在配置里或路径不是绝对路径）。',OWNER,'改用设置页导入私钥。'),
  KEY_CHANGED_DURING_IMPORT:E('导入过程中私钥文件被改动，已放弃。',OWNER,'重新导入一次。'),
  KEY_IMPORT_FAILED:E('私钥没有存进本机密钥库。',OWNER,'重试导入；仍失败就报维护者。'),
- IDENTITY_VERIFICATION_FAILED:E('用这把私钥向 GitHub 核对 App 身份没有通过，私钥没有保存。',OWNER,'确认私钥属于设置页里填的那个 App，安装 ID 也正确，然后重新导入。'),
+ IDENTITY_VERIFICATION_FAILED:E('用这把私钥向 GitHub 核对 App 身份没有通过，私钥没有保存。',OWNER,'确认私钥属于设置页里填的那个 App，并且这个 App 已安装到 good-night-oppie，然后重新导入。'),
  DECRYPT_FAILED:E('本机密钥库里的私钥解不开（可能换了 Windows 用户或机器）。',OWNER,'在这台机器上用当前 Windows 用户重新导入私钥。'),
  INVALID_CIPHERTEXT:E('本机密钥库里的私钥数据损坏。',OWNER,'重新导入私钥。'),
  INVALID_KEY_DATA:E('本机密钥库里的私钥数据不完整。',OWNER,'重新导入私钥。'),
@@ -226,7 +228,8 @@ function specifics(code,d){
  if(!d||typeof d!=='object')return '';
  if(code==='INSTALLATION_PERMISSION_MISSING'&&Array.isArray(d.missing)){
   const items=d.missing.map(m=>clip(m.permission)+':'+clip(m.required)+'（现为 '+clip(m.installed)+'）').join('，');
-  return 'GitHub App '+clip(d.app)+' 的安装缺少：'+items+'。请主人在 App 设置的 Permissions 里加上（'+clip(d.appPermissionsUrl)+'），再到组织的安装页接受权限更新（'+clip(d.installationUrl)+'）。';
+  const wf=Array.isArray(d.workflowFiles)&&d.workflowFiles.length?'这次要改的 '+d.workflowFiles.slice(0,10).map(clip).join('、')+' 在 .github/workflows/ 下，GitHub 要求 App 有 workflows:write 才能改，所以没有执行。':'';
+  return 'GitHub App '+clip(d.app)+' 的安装缺少：'+items+'。'+wf+'请主人在 App 设置的 Permissions 里加上（'+clip(d.appPermissionsUrl)+'），再到组织的安装页接受权限更新（'+clip(d.installationUrl)+'）。';
  }
  if(Array.isArray(d.failed)&&d.failed.length)return '没对上的项：'+d.failed.slice(0,10).map(f=>(LABEL[f.check]||clip(f.check))+'（应为 '+clip(f.expected)+'，GitHub 返回 '+clip(f.actual)+'）').join('；')+'。';
  if(code==='REPOSITORY_NOT_INSTALLED'&&Array.isArray(d.repositories))return '涉及的仓库：'+d.repositories.slice(0,5).map(clip).join('，')+'。';
