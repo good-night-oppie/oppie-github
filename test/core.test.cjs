@@ -466,3 +466,51 @@ test('#16 enqueue_pull refuses a token GitHub narrowed below contents:write befo
  const r=await f.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'));
  assert.equal(r.errorCode,'TOKEN_PERMISSION_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(f.calls.some(c=>c.path==='/graphql'),false);
 });
+
+// Deja 2026-11-16 (#33): the owner adds workflows:write to DejaOppieXYZ for the merge_group change.
+const WORKFLOWS={...expected,workflows:'write'};
+const wfFile=(path='.github/workflows/test.yml')=>({path,branch:'deja/merge-group',expected_sha:null,message:'ci',content_base64:'dGVzdA=='});
+test('an installation that also holds workflows:write still passes identity, with and without repo',async()=>{
+ const f=fixture({account:'deja',permissions:WORKFLOWS});
+ const all=await f.client.run({account:'deja',operation:'identity'});
+ assert.equal(all.ok,true,JSON.stringify(all));assert.equal(all.result.installationPermissions.workflows,'write');
+ const one=await f.client.run(input('identity',{},'deja','oppie-github'));
+ assert.equal(one.ok,true,JSON.stringify(one));
+ assert.deepEqual(executionTokens(f.calls),[{repositories:['oppie-github'],permissions:{metadata:'read'}}]);
+});
+test('update_file and edit_file under .github/workflows/ request workflows:write only when they touch it',async()=>{
+ const f=fixture({account:'deja',permissions:WORKFLOWS});
+ const w=await f.client.run(input('update_file',wfFile(),'deja','oppie-github'));
+ assert.equal(w.ok,true,JSON.stringify(w));
+ const n=await f.client.run(input('update_file',wfFile('docs/workflows.md'),'deja','oppie-github'));
+ assert.equal(n.ok,true,JSON.stringify(n));
+ assert.deepEqual(executionTokens(f.calls).map(t=>t.permissions),[{metadata:'read',contents:'write',workflows:'write'},{metadata:'read',contents:'write'}]);
+ const b=Buffer.from('OLD'),e=fixture({account:'deja',permissions:WORKFLOWS,override:(p,i)=>{
+  if(!p.includes('/contents/'))return null;
+  if(i.method==='GET')return {status:200,data:{type:'file',encoding:'base64',sha:blobHash(b),size:b.length,content:b.toString('base64')}};
+  return {status:200,data:{content:{sha:'b'.repeat(40)},commit:{sha:'c'.repeat(40)}}};
+ }});
+ const r=await e.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),path:'.github/workflows/test.yml'},'deja','oppie-github'));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(executionTokens(e.calls).map(t=>t.permissions),[{metadata:'read',contents:'write',workflows:'write'}]);
+});
+test('a workflow file change without the workflows permission says what is missing and where to add it',async()=>{
+ const f=fixture({account:'deja'});
+ const r=await f.client.run(input('update_file',wfFile(),'deja','oppie-github'));
+ assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(r.execution,'not_executed');
+ assert.deepEqual(r.details.missing,[{permission:'workflows',required:'write',installed:'none'}]);
+ assert.deepEqual(r.details.workflowFiles,['.github/workflows/test.yml']);
+ assert.equal(executionTokens(f.calls).length,0);assert.equal(f.calls.some(c=>c.method==='PUT'),false);
+ const said=require('../node/messages.cjs').explain(r).message;
+ assert.ok(said.includes('workflows:write（现为 none）'));assert.ok(said.includes('.github/workflows/test.yml'));
+ assert.ok(said.includes('https://github.com/organizations/good-night-oppie/settings/apps/'+ACCOUNTS.deja.app_slug+'/permissions'));
+ assert.ok(!JSON.stringify(r).includes('secret-token'));
+});
+test('a token that GitHub returns without the workflows:write that was requested is discarded',async()=>{
+ const f=fixture({account:'deja',permissions:WORKFLOWS,override:async(p,i)=>{
+  if(!p.endsWith('/access_tokens')||!JSON.parse(i.body).repositories)return null;
+  return {status:201,data:{token:'secret-token-x',expires_at:new Date(NOW+3600000).toISOString(),permissions:{metadata:'read',contents:'write'}}};
+ }});
+ const r=await f.client.run(input('update_file',wfFile(),'deja','oppie-github'));
+ assert.equal(r.errorCode,'TOKEN_PERMISSION_MISMATCH');assert.equal(f.calls.some(c=>c.method==='PUT'),false);
+});
