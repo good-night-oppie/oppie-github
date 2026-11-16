@@ -48,9 +48,9 @@ async function dispatch(method,args,host){
  }
  if(method==='run_confirmed'){
   const {input,confirmation}=args;
-  // Ruleset changes: any account whose installation can administer the repository, but only with the
-  // owner's written authorization and a host confirmation each time (unchanged safety rule).
-  if(typeof input?.account!=='string'||!(await hostAccounts()).includes(input.account)||input?.operation!=='ruleset_update'||typeof confirmation!=='string'||!confirmation)rejectBeforeExecution('OWNER_CONFIRMATION_REQUIRED');
+  // Ruleset changes (owner's written authorization + host confirmation) and merge-setting changes
+  // (host confirmation): any account whose installation can administer the repository, each time.
+  if(typeof input?.account!=='string'||!(await hostAccounts()).includes(input.account)||!['ruleset_update','admin_update'].includes(input?.operation)||typeof confirmation!=='string'||!confirmation)rejectBeforeExecution('OWNER_CONFIRMATION_REQUIRED');
   return createClient({scopeConfig,credentials:async a=>(await store.load(a)).privateKey,authorize:async()=>true,claimAuthorization:async nonce=>{await store.list();return require('./owner-authorization.cjs').claimNonce(path.join(store.paths.root,'qq-authorization-nonces'),nonce);}}).run(input);
  }
  if(method==='inbox_service'){if(Object.keys(args).some(k=>k!=='action')||!['start','stop','status'].includes(args.action))rejectBeforeExecution('INVALID_ACTION');return inboxService[args.action]();}
