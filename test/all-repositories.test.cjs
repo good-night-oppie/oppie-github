@@ -20,7 +20,7 @@ function fixture(account,{selection='all',listing=orgRepos(),pageTotal}={}){
   const u=new URL(url),route=u.pathname,method=init.method||'GET',body=init.body?JSON.parse(init.body):null;calls.push({route,method,body,query:u.search});let data;
   if(route==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:selection,permissions:PERMS(account)};
-  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?PERMS(account):{metadata:'read'}};}
+  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?body.permissions:{metadata:'read'}};}
   else if(route==='/installation/repositories'){
    if(init.headers.Authorization==='Bearer probe'){const page=Number(u.searchParams.get('page')||1),per=Number(u.searchParams.get('per_page'));data={total_count:pageTotal?pageTotal(page):listing.length,repositories:listing.slice((page-1)*per,page*per)};}
    else{const l=listing.filter(r=>requested.includes(r.id));data={total_count:l.length,repositories:l};}
@@ -63,7 +63,7 @@ test('a stranger repository never reaches an execution token; a token that conta
   const a=ACCOUNTS.bb;let data;
   if(u.pathname==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(u.pathname==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'all',permissions:PERMS('bb')};
-  else if(u.pathname.endsWith('/access_tokens')){const b=JSON.parse(init.body);data={token:b.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:b.repository_ids?PERMS('bb'):{metadata:'read'}};}
+  else if(u.pathname.endsWith('/access_tokens')){const b=JSON.parse(init.body);data={token:b.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:b.repository_ids?b.permissions:{metadata:'read'}};}
   else if(u.pathname==='/installation/repositories')data={total_count:listing.length,repositories:listing};
   return {ok:true,status:200,text:async()=>JSON.stringify(data)};
  }});
