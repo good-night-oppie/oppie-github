@@ -57,6 +57,13 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 // Any repository of the owner organisation; whether the App can use it is decided by its installation.
 function repoName(x){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!/^[A-Za-z0-9._-]{1,100}$/.test(n)||n==='.'||n==='..')bad('REPOSITORY_NOT_ALLOWED');return n;}
 function permissions(operation){return {metadata:'read',...OPERATION_NEEDS[operation]};}
+// GitHub refuses App changes under .github/workflows/ unless the token holds workflows:write.
+// Only file writes that touch such a path ask for it; nothing else ever does.
+const WORKFLOW_DIR='.github/workflows/';
+function workflowPaths(preflight){
+ const paths=['file','edit'].includes(preflight?.kind)?[preflight.path]:preflight?.kind==='commit'?preflight.plan.changes.flatMap(c=>c.from?[c.from,c.path]:[c.path]):[];
+ return paths.filter(p=>p.startsWith(WORKFLOW_DIR));
+}
 const PERMISSION_RANK=Object.freeze({none:0,read:1,write:2});
 // Levels the installation lacks for these needs (an installation may hold more than needed).
 function missingPermissions(actual,needed){
@@ -65,16 +72,15 @@ function missingPermissions(actual,needed){
 }
 // Installation: only an installation that lacks something this operation needs fails, and the
 // error says what is missing and where the owner adds it. Extra installation permissions are fine.
-function checkInstallation(actual,a,operation,installationId){
- const missing=missingPermissions(actual,permissions(operation));if(!missing.length)return;
+function checkInstallation(actual,a,operation,installationId,needed=permissions(operation),workflowFiles=[]){
+ const missing=missingPermissions(actual,needed);if(!missing.length)return;
  const appPermissionsUrl='https://github.com/organizations/'+OWNER+'/settings/apps/'+a.app_slug+'/permissions',installationUrl='https://github.com/organizations/'+OWNER+'/settings/installations/'+installationId;
- throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,appPermissionsUrl,installationUrl,
+ throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,...(workflowFiles.length?{workflowFiles:workflowFiles.slice(0,10)}:{}),appPermissionsUrl,installationUrl,
   fix:'Add '+missing.map(m=>m.permission+':'+m.required+' (installed: '+m.installed+')').join(', ')+' in the App permissions ('+appPermissionsUrl+') and accept the update on the installation page ('+installationUrl+').'});
 }
 // Execution token: exactly what was requested for this operation (nothing extra, nothing stronger,
 // nothing missing). The installation may hold more; the token never does.
-function checkTokenPermissions(actual,operation){
- const requested=permissions(operation);
+function checkTokenPermissions(actual,requested){
  const granted=obj(actual)?Object.fromEntries(Object.entries(actual).filter(([,v])=>v!=='none')):null;
  if(!granted||Object.keys(granted).length!==Object.keys(requested).length||Object.entries(requested).some(([k,v])=>granted[k]!==v))
   throw new CoreError('TOKEN_PERMISSION_MISMATCH','not_executed',undefined,{requested,granted:granted?Object.fromEntries(Object.entries(granted).filter(([k,v])=>/^[a-z_]{1,40}$/.test(k)&&typeof v==='string').slice(0,60)):null});
@@ -193,7 +199,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const installationId=account.installation_id||Number(installation?.id);
    if(!Number.isSafeInteger(installationId)||Number(installation?.id)!==installationId||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
    // The installation may hold more than this operation needs (and usually does); only a lack fails.
-   checkInstallation(installation.permissions,account,operation,installationId);
+   const workflowFiles=workflowPaths(preflight),needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
+   checkInstallation(installation.permissions,account,operation,installationId,needed,workflowFiles);
    // identity also reports the whole installation (an unscoped metadata-only token, bounded listing).
    async function listInstallation(){
     const probe=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
@@ -217,10 +224,10 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(preflight?.kind==='owner_reference'&&(!proofRepo||![repo,'MontClip'].includes(proofRepo)))bad('OWNER_REFERENCE_SCOPE');
    const tokenRepos=[...new Set([repo,...(proofRepo?[proofRepo]:[])])];
    let tokenResponse;
-   try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repositories:tokenRepos,permissions:permissions(operation)});}
+   try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repositories:tokenRepos,permissions:needed});}
    catch(e){if(e instanceof CoreError&&e.status===422)throw new CoreError('REPOSITORY_NOT_INSTALLED','not_executed',422,{repositories:tokenRepos.map(n=>OWNER+'/'+n)});throw e;}
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
-   const token=tokenResponse.token;secrets.push(token);checkTokenPermissions(tokenResponse.permissions,operation);
+   const token=tokenResponse.token;secrets.push(token);checkTokenPermissions(tokenResponse.permissions,needed);
    const repos=await api('/installation/repositories?per_page=100',token);
    const exactRepos=r=>r?.total_count===tokenRepos.length&&Array.isArray(r.repositories)&&r.repositories.length===tokenRepos.length&&r.repositories.every(x=>obj(x)&&tokenRepos.includes(x.name)&&x.full_name===OWNER+'/'+x.name&&Number.isSafeInteger(x.id))&&new Set(r.repositories.map(x=>x.name)).size===tokenRepos.length;
    if(!exactRepos(repos)){
