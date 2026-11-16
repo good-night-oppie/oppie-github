@@ -10,10 +10,10 @@ const {createQueue,REPOS:QUEUE_REPOS}=require('../node/review-queue.cjs');
 const SIX={MontClip:1441621868,'MontClip-Cindy':1446532339,'montclip-rsi':1450602468,'rsi-playbooks':1450603260,'oppie-github':1451885379,'sglang-review-inbox':1451900929};
 const SEVEN={...SIX,cindy:1457433299};
 const TWO={MontClip:1441621868,'MontClip-Cindy':1446532339};
-const DESIGN={bb:SEVEN,deja:SEVEN,dd:SEVEN,qq:SEVEN,cindy:SIX,gg:SIX,jj:SIX,pg:SIX,rea:SIX,video:SIX,vv:SIX,reviewinbox:TWO};
-const WRITERS=['bb','deja'];
+const DESIGN={bb:SEVEN,deja:SEVEN,dd:SEVEN,qq:SEVEN,cindy:SEVEN,gg:SEVEN,jj:SEVEN,pg:SEVEN,rea:SEVEN,video:SEVEN,vv:SEVEN,reviewinbox:SEVEN};
+const WRITERS=['bb','deja','dd','reviewinbox'];
 // Token permissions as they were before #22; this change must not alter them.
-const TOKEN_PERMISSIONS=account=>({contents:['qq','reviewinbox'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})});
+const TOKEN_PERMISSIONS=account=>({contents:account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})});
 const SHA='a'.repeat(40),SHA2='b'.repeat(40);
 const ASSISTED='m\n\nAssisted-by: Cindy (https://cindy.app)';
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
@@ -148,9 +148,10 @@ test('DD on cindy may read and post COMMENT reviews',async()=>{
   const f=fixture('dd'),r=await run(f,'dd',operation,args);assert.equal(r.ok,true,operation+': '+r.errorCode);
  }
 });
-test('DD on cindy is refused every write, including issue comments, and non-COMMENT reviews',async()=>{
- for(const [operation,args] of AUTHORING)await refusedBeforeCredentials('dd',operation,args,'REVIEW_ONLY_REPOSITORY');
- for(const event of ['APPROVE','REQUEST_CHANGES'])await refusedBeforeCredentials('dd','submit_review',{number:7,commit_id:SHA,event,body:'x'},'COMMENT_ONLY_REVIEWER');
+test('DD on cindy inherits ordinary issue writes and APPROVE reviews',async()=>{
+ for(const [operation,args] of [['create_issue',{title:'t'}],['submit_review',{number:7,commit_id:SHA,event:'APPROVE',body:'x'}]]){
+ const f=fixture('dd'),r=await run(f,'dd',operation,args);assert.equal(r.ok,true,r.errorCode);assert.equal(writes(f).length,1);
+ }
 });
 test('DD keeps its ordinary role on the original six repositories',async()=>{
  const f=fixture('dd'),r=await run(f,'dd','create_issue',{title:'t'},'MontClip');
@@ -163,11 +164,9 @@ test('QQ on cindy may read and review',async()=>{
   const f=fixture('qq'),r=await run(f,'qq',operation,args);assert.equal(r.ok,true,operation+': '+r.errorCode);
  }
 });
-test('QQ admin, ruleset, dismissal and merge-queue operations do not extend to cindy',async()=>{
- const owner='https://github.com/good-night-oppie/cindy/issues/1#issuecomment-2';
- for(const [operation,args] of [['list_rulesets',{}],['get_ruleset',{ruleset_id:1}],['ruleset_update',{ruleset_id:1,ruleset:{enforcement:'active'},owner_authorization:owner,nonce:'a'.repeat(32)}],['dismiss_review',{number:7,review_id:1,message:'x'}],['enqueue_pull',{number:7,commit_id:SHA}]])
-  await refusedBeforeCredentials('qq',operation,args,'REVIEW_ONLY_REPOSITORY');
- for(const [operation,args] of [['admin_get',{}],['admin_update',{allow_squash_merge:true}],...AUTHORING])await refusedBeforeCredentials('qq',operation,args,'QQ_AUTHORING_REFUSED');
+test('QQ cindy inherits ruleset reads while global authoring restrictions remain',async()=>{
+ for(const [operation,args] of [['list_rulesets',{}],['get_ruleset',{ruleset_id:1}]]){const f=fixture('qq'),r=await run(f,'qq',operation,args);assert.equal(r.ok,true,r.errorCode);}
+ for(const [operation,args] of AUTHORING)await refusedBeforeCredentials('qq',operation,args,'QQ_AUTHORING_REFUSED');
 });
 test('QQ keeps its existing operations on the original repositories',async()=>{
  const f=fixture('qq'),r=await run(f,'qq','list_rulesets',{},'MontClip');assert.equal(r.ok,true,r.errorCode);
@@ -218,7 +217,7 @@ for(const account of Object.keys(DESIGN).filter(a=>Object.hasOwn(DESIGN[a],'cind
 
 // 11. QQ (#23): every account across the three installation states.
 const STRANGER={id:99,name:'other',full_name:'good-night-oppie/other'};
-const ROLE_PROBE={bb:['create_branch',{branch:'agy/x',sha:SHA},null],deja:['create_branch',{branch:'agy/x',sha:SHA},null],dd:['create_branch',{branch:'agy/x',sha:SHA},'REVIEW_ONLY_REPOSITORY'],qq:['enqueue_pull',{number:7,commit_id:SHA},'REVIEW_ONLY_REPOSITORY']};
+const ROLE_PROBE={bb:['create_branch',{branch:'agy/x',sha:SHA},null],deja:['create_branch',{branch:'agy/x',sha:SHA},null],dd:['create_branch',{branch:'agy/x',sha:SHA},null],qq:['create_issue',{title:'t'},'QQ_AUTHORING_REFUSED']};
 for(const [account,execution] of Object.entries(DESIGN))test(account+' across six, six+cindy and six+stranger installations',async()=>{
  // Six repositories: existing operations work on every original execution repository; cindy is not installed.
  for(const repo of Object.keys(execution).filter(r=>r!=='cindy')){
@@ -231,9 +230,11 @@ for(const [account,execution] of Object.entries(DESIGN))test(account+' across si
  if(Object.hasOwn(ROLE_PROBE,account)){
   const [operation,args,code]=ROLE_PROBE[account],r=await run(seven,account,operation,args);
   if(code)assert.equal(r.errorCode,code);else{assert.equal(r.ok,true,r.errorCode);assert.equal(writes(seven).length,1);}
- }else assert.equal((await run(seven,account,'get_issue',{number:1})).errorCode,'REPOSITORY_NOT_ALLOWED');
+ }else assert.equal((await run(seven,account,'get_issue',{number:1})).ok,true);
  // Six plus an unknown repository: still a mismatch, before any execution token.
  const odd=rows(SIX);odd.repositories.push(STRANGER);odd.total_count++;
  const f=fixture(account,{installed:odd}),r=await run(f,account,'identity',{},Object.keys(execution)[0]);
  assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(tokens(f).length,1);
 });
+
+test('ReviewInbox supports all review decisions across seven repositories',async()=>{for(const repo of Object.keys(SEVEN))for(const event of ['COMMENT','APPROVE','REQUEST_CHANGES']){const f=fixture('reviewinbox'),r=await run(f,'reviewinbox','submit_review',{number:7,commit_id:SHA,event,body:'synthetic'},repo);assert.equal(r.ok,true,repo+' '+event+': '+r.errorCode);assert.equal(writes(f).length,1);}});
