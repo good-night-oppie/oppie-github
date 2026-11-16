@@ -194,12 +194,15 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    let pem;try{pem=await credentials(account.account);}catch(_){bad('CREDENTIAL_UNAVAILABLE');}if(typeof pem!=='string')bad('CREDENTIAL_UNAVAILABLE');
    secrets.push(pem);const jwt=makeJwt(account,pem,now());secrets.push(jwt);pem=null;
    const app=await api('/app',jwt);
-   // Identity never follows a matching name alone: App ID and owner stay pinned.
+   // Identity never follows a name: App ID and owner stay pinned. The slug is a name the owner can
+   // change on GitHub, so a different slug only adds a warning (ADR 0003 Amendment 1, PG; Deja agreed).
+   // Recognising a teammate's bot comments (knownBotLogin) still uses the configured slugs only.
    const shown=v=>typeof v==='string'||Number.isSafeInteger(v)?String(v).slice(0,100):v===undefined||v===null?'missing':'invalid';
    checksFailed('APP_IDENTITY_MISMATCH',[
     {check:'app_id',expected:String(account.app_id),actual:shown(app?.id),ok:Number(app?.id)===account.app_id},
-    {check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug),ok:typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)},
     {check:'app_owner',expected:OWNER,actual:shown(app?.owner?.login),ok:app?.owner?.login===OWNER}]);
+   const warnings=typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)?[]:[{check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug)}];
+   const warned=warnings.length?{warnings}:{};
    // Compiled accounts keep their pinned installation; accounts added in the settings page use the
    // App's single installation in good-night-oppie, looked up now (follows GitHub on every call).
    let installation;
@@ -236,8 +239,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    }
    const installationPermissions=Object.fromEntries(Object.entries(obj(installation.permissions)?installation.permissions:{}).filter(([k,v])=>/^[a-z_]{1,40}$/.test(k)&&Object.hasOwn(PERMISSION_RANK,v)).slice(0,60));
    const installationSummary=()=>({app_id:account.app_id,app_slug:app.slug,owner:OWNER,installation_id:installationId,installationRepositorySelection:installation.repository_selection,installationPermissions,
-    availableOperations:OPERATION_NAMES.filter(o=>!missingPermissions(installation.permissions,permissions(o)).length),scopeRevision:config.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config)});
-   if(repo===null)return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:null,operation,execution:'completed',url:app.html_url},result:clean({...installationSummary(),installationRepositories:await listInstallation()},secrets)};
+    availableOperations:OPERATION_NAMES.filter(o=>!missingPermissions(installation.permissions,permissions(o)).length),scopeRevision:config.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config),...warned});
+   if(repo===null)return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:null,operation,execution:'completed',url:app.html_url,...warned},result:clean({...installationSummary(),installationRepositories:await listInstallation()},secrets)};
    // The execution token covers only the target repository (plus the owner's authorization comment
    // repository for ruleset_update) and only this operation's permissions.
    const proofRepo=preflight?.kind==='owner_reference'?preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1]:null;
@@ -326,7 +329,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
    const result=operation==='identity'?{...installationSummary(),repository:{id:target.id,full_name:target.full_name},installationRepositories:await listInstallation(),expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
-   return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
+   return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url,...warned},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
