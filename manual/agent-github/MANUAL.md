@@ -14,7 +14,7 @@ Every failed result has errorCode and execution, plus message (a plain reason in
 
 ## Credentials
 
-Prefer the settings page: the owner pastes the key there and confirms a card showing what GitHub reports for the App. Otherwise import only an explicitly designated local .pem via github_import_key. Worker validates GitHub identity before DPAPI CurrentUser encrypted persistence on this Windows computer. Private keys and tokens never belong in chat, prompts, logs or the plugin package. No global GH_TOKEN or shared gh login is modified. Other devices need separate setup. Keep download files restricted until import verification, then remove the task-generated plaintext copy. Do not remove user pre-existing keys.
+Prefer the settings page: the owner pastes the key there and confirms a card showing what GitHub reports for the App. Otherwise import only an explicitly designated local .pem via github_import_key; it shows the owner the same card (account, App ID, short key fingerprint, installation) and stores nothing unless the owner confirms (#39). Give the path as text; never attach the key file, its content would enter the conversation. Worker validates GitHub identity before DPAPI CurrentUser encrypted persistence on this Windows computer. Private keys and tokens never belong in chat, prompts, logs or the plugin package. No global GH_TOKEN or shared gh login is modified. Other devices need separate setup. Keep download files restricted until import verification, then remove the task-generated plaintext copy. Do not remove user pre-existing keys.
 
 ## Coding and review
 

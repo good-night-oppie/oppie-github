@@ -6,7 +6,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),crypto=requ
 const fs=require('node:fs'),fsp=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
 const {createStore,setAccountResolver}=require('../node/store.cjs');
 const {validateConfig,BUILTIN_APP_IDS}=require('../node/scope-config.cjs');
-const {createSettings,summarize,describeInstallation}=require('../node/scope-settings.cjs');
+const {createSettings,summarize,describeInstallation,describeInstallationCard}=require('../node/scope-settings.cjs');
 const {createSignedLoader}=require('../node/scope-loader.cjs');
 const {createClient,ACCOUNTS,configuredAccount}=require('../node/core.cjs');
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
@@ -182,6 +182,89 @@ test('main.js: key import shows what GitHub reports, stores only after confirmat
  assert.equal(failed.confirms.length,0);assert.equal(f.result.errorCode,'INSTALLATION_NOT_FOUND');
  const junk=bridge();await junk.send({type:'settings-import-key',id:'k3',account:'../x'});assert.equal(junk.nodeCalls.length,0);
  await junk.send({type:'run',id:'k4'});await junk.send({type:'settings-save',id:'bad id!'});assert.equal(junk.nodeCalls.length,0);
+});
+// #38 (P1): the host opens a confirmation card only for a body of at most 300 characters. The owner's
+// import of ad failed six times because the full summary (every permission) was longer.
+const BROAD={actions:'read',actions_variables:'write',administration:'read',artifact_metadata:'read',checks:'read',contents:'write',deployments:'read',discussions:'write',environments:'read',installation_repositories:'write',issues:'write',merge_queues:'read',metadata:'read',pull_requests:'write',repository_hooks:'write',secrets:'write',workflows:'write'};
+const MANY={complete:true,repositories:Array.from({length:56},(_,i)=>'good-night-oppie/repository-with-a-long-name-'+i)};
+test('import card (#38): an App with many permissions and repositories gets a card within 300 characters',async t=>{
+ const wide={...REMOTE,installationPermissions:BROAD,installationRepositories:MANY};
+ assert.ok(describeInstallation('ad',wide).length>300,'the full summary is what used to overflow');
+ const card=describeInstallationCard('ad',wide);
+ assert.ok(card.length<=220,card.length+' '+card);assert.match(card,/全部仓库 56 个，权限 17 项，其中可写/);assert.match(card,/App adoppiexyz（ID 5764947），安装 182084517/);
+ // Many write permissions are shortened with a count, never cut mid-word or over the limit.
+ const writes=Object.fromEntries(Array.from({length:30},(_,i)=>['permission_number_'+i,'write']));
+ const shortened=describeInstallationCard('ad',{...wide,installationPermissions:writes});
+ assert.ok(shortened.length<=220,String(shortened.length));assert.match(shortened,/ 等 30 项$/);
+ // Inspect returns the card next to the full summary; the store result keeps the full summary.
+ const {settings,remote}=await fixture(t);Object.assign(remote,wide);
+ const config=plus(await baseConfig(settings),'ad',AD);
+ const plan=await settings.propose({config,expectedRevision:0});await settings.save({config,expectedRevision:0,hash:plan.hash});
+ const seen=await settings.importKey({account:'ad',phase:'inspect'},{secrets:{app_private_key:pem}});
+ // The card the owner confirms names the key too (#39): the same short fingerprint on both import paths.
+ const fp=crypto.createHash('sha256').update(crypto.createPublicKey(crypto.createPrivateKey(pem)).export({type:'spki',format:'der'})).digest('hex');
+ assert.equal(seen.card,describeInstallationCard('ad',wide,fp));assert.ok(seen.card.includes('私钥指纹 '+fp.slice(0,8)+'…'+fp.slice(-4)));assert.ok(seen.card.length<=220);
+ assert.equal(seen.summary,describeInstallation('ad',wide));
+ const b=bridge({nodeResult:r=>r.params.phase==='inspect'?seen:{ok:true,account:'ad',summary:seen.summary}});
+ const r=await b.send({type:'settings-import-key',id:'w1',account:'ad'});
+ assert.equal(b.confirms.length,1);assert.ok(b.confirms[0].body.length<=300,String(b.confirms[0].body.length));assert.ok(b.confirms[0].body.includes(seen.card));
+ assert.equal(r.result.ok,true);assert.equal(r.result.summary,seen.summary,'the full summary comes back after confirming');
+});
+test('import card (#38): an oversized body never reaches the host; a host refusal keeps its own code',async()=>{
+ const long={ok:true,account:'ad',summary:'x'.repeat(400),hash:'e'.repeat(64)};
+ const big=bridge({nodeResult:r=>r.params.phase==='inspect'?long:{ok:true}});
+ const tooBig=await big.send({type:'settings-import-key',id:'w2',account:'ad'});
+ assert.equal(tooBig.result.errorCode,'CONFIRMATION_TOO_LARGE');assert.equal(big.confirms.length,0);assert.deepEqual(big.nodeCalls.map(c=>c.params.phase),['inspect']);
+ const ok={ok:true,account:'ad',summary:'s',card:'账号 ad：App adoppiexyz',hash:'e'.repeat(64)};
+ for(const [type,extra] of [['settings-import-key',{account:'ad'}],['settings-save',{config:{},expectedRevision:3}]]){
+  const host=bridge({nodeResult:r=>r.method==='settings/propose'?{ok:true,summary:'加账号 ad',hash:'f'.repeat(64),revision:3,nextRevision:4}:r.params.phase==='inspect'?ok:{ok:true},confirm:async()=>({ok:false,errorCode:'BODY_TOO_LONG'})});
+  const res=await host.send({type,id:'w3',...extra});
+  assert.equal(res.result.errorCode,'OWNER_CONFIRMATION_UNAVAILABLE',type);assert.equal(JSON.stringify(res.result.details),JSON.stringify({hostErrorCode:'BODY_TOO_LONG'}),type);
+  assert.ok(!host.nodeCalls.some(c=>c.method==='settings/save'||c.params?.phase==='store'),type+' stores nothing');
+  const odd=bridge({nodeResult:r=>r.method==='settings/propose'?{ok:true,summary:'加账号 ad',hash:'f'.repeat(64),revision:3,nextRevision:4}:r.params.phase==='inspect'?ok:{ok:true},confirm:async()=>({ok:false,errorCode:'bad code <x>'})});
+  assert.equal(JSON.stringify((await odd.send({type,id:'w4',...extra})).result.details),JSON.stringify({hostErrorCode:'UNKNOWN'}),type);
+ }
+});
+// #39 (owner, via QQ in #38 6911291761): github_import_key shows the same card before anything is stored.
+function toolHost({inspect,confirm=async()=>({ok:true,confirmed:true})}={}){
+ const confirms=[],requests=[],sent=[];let handler;
+ const card='账号 ad：App adoppiexyz（ID 5764947），私钥指纹 607fe064…a171，安装 182084517，全部仓库 56 个，权限 17 项';
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{cindy:{onHostMessage:f=>handler=f,confirm:async b=>{confirms.push(b);return confirm(b);},send:async m=>sent.push(m),node:{request:async r=>{requests.push(r);return r.params.phase==='inspect'?(inspect?inspect(r):{ok:true,result:{ok:true,account:'ad',summary:'full',card,hash:'d'.repeat(64)}}):{ok:true,result:{ok:true,stored:true}};}}},TextEncoder,JSON,Error,Object});
+ const call=async args=>{await handler({type:'tool-call',tool:'github_import_key',callId:'c1',args});return sent.at(-1).result;};
+ return {call,confirms,requests,card};
+}
+test('import by file path (#39): the owner confirms the same card first; only then is the key stored',async()=>{
+ const h=toolHost();const r=await h.call({account:'ad',pem_path:'C:/keys/ad.pem'});
+ assert.equal(r.ok,true);assert.equal(h.confirms.length,1);assert.ok(h.confirms[0].body.length<=300);assert.ok(h.confirms[0].body.includes(h.card));assert.equal(h.confirms[0].danger,true);
+ assert.deepEqual(h.requests.map(x=>[x.method,x.params.phase]),[['import','inspect'],['import','store']]);
+ assert.equal(h.requests[1].params.hash,'d'.repeat(64),'the store step carries the hash of what the owner saw');
+ assert.ok(!JSON.stringify(h.confirms).includes('C:/keys'),'the card shows no key path');
+});
+test('import by file path (#39): cancelled, refused or unavailable cards store nothing and keep the host code',async()=>{
+ const cancel=toolHost({confirm:async()=>({ok:true,confirmed:false})});
+ assert.equal((await cancel.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'OWNER_CONFIRMATION_REQUIRED');
+ assert.deepEqual(cancel.requests.map(x=>x.params.phase),['inspect']);
+ for(const code of ['RATE_LIMITED','BUSY','UNAVAILABLE']){
+  const h=toolHost({confirm:async()=>({ok:false,errorCode:code})});const r=await h.call({account:'ad',pem_path:'C:/keys/ad.pem'});
+  assert.equal(r.errorCode,'OWNER_CONFIRMATION_UNAVAILABLE',code);assert.equal(r.details.hostErrorCode,code);assert.equal(r.execution,'not_executed');
+  assert.deepEqual(h.requests.map(x=>x.params.phase),['inspect'],code+' stores nothing');
+ }
+ const long=toolHost({inspect:()=>({ok:true,result:{ok:true,card:'x'.repeat(400),hash:'d'.repeat(64)}})});
+ assert.equal((await long.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'CONFIRMATION_TOO_LARGE');assert.equal(long.confirms.length,0);
+ assert.deepEqual(long.requests.map(x=>x.params.phase),['inspect']);
+ const failed=toolHost({inspect:()=>({ok:true,result:{ok:false,errorCode:'INSTALLATION_NOT_FOUND',execution:'not_executed'}})});
+ assert.equal((await failed.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'INSTALLATION_NOT_FOUND');assert.equal(failed.confirms.length,0);
+ // A caller cannot skip the card by sending its own phase or hash.
+ const forged=toolHost();
+ assert.equal((await forged.call({account:'ad',pem_path:'C:/keys/ad.pem',phase:'store',hash:'d'.repeat(64)})).errorCode,'INVALID_REQUEST');
+ assert.equal(forged.requests.length,0);assert.equal(forged.confirms.length,0);
+});
+test('settings page (#38): a failed import says the key was not stored and shows the host code',()=>{
+ const src=fs.readFileSync(path.join(__dirname,'../settings.js'),'utf8');
+ assert.match(src,/的私钥没有导入；Cindy 显示的「凭证已保存」只是导入用的临时副本，已经清除。/);
+ assert.ok(src.includes("'确认框没有打开（Cindy 返回 ' + result.details.hostErrorCode"));
+ const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../ghost.json'),'utf8'));
+ assert.match(m.node.secretBindings[0].hint,/不代表导入成功/);
 });
 test('manifest: settings page, key bound only to settings/import_key, tools not blocked by setup',()=>{
  const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../ghost.json'),'utf8'));

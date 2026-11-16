@@ -46,6 +46,8 @@ function explain(result) {
   // The worker adds a plain reason and the next step (node/messages.cjs); older answers fall back here.
   const next = result?.next?.who && result?.next?.action ? ' 下一步（' + result.next.who + '）：' + result.next.action : '';
   if (typeof result?.message === 'string' && result.message && result?.next) return result.message + next + '（' + result.errorCode + '）';
+  if (result?.errorCode === 'OWNER_CONFIRMATION_UNAVAILABLE' && typeof result?.details?.hostErrorCode === 'string')
+    return '确认框没有打开（Cindy 返回 ' + result.details.hostErrorCode + '），没有保存。请把这个代码告诉维护者。';
   const reason = result?.details?.reason ? '（' + result.details.reason + '）' : '';
   return (ERRORS[result?.errorCode] || ('未完成：' + (result?.errorCode || '未知错误'))) + reason;
 }
@@ -136,7 +138,7 @@ $('#key-import').onclick = async () => {
   try {
     const put = await fetch('/secrets/app_private_key', { method: 'PUT', body: JSON.stringify({ value: pem }) });
     if (put.status !== 204) { say('私钥没能交给 Cindy 保险库（HTTP ' + put.status + '）。', true); return; }
-    say('等待确认…');
+    say('私钥已临时交给 Cindy 保险库，正在向 GitHub 核对，还没有保存。等待确认…');
     result = await ask({ type: 'settings-import-key', account, replace: $('#key-replace').checked });
   } finally {
     // Always clear the vault copy; the DPAPI-protected store is the only persistent copy.
@@ -145,7 +147,11 @@ $('#key-import').onclick = async () => {
   }
   if (result?.ok) {
     await load('已导入 ' + account + ' 的私钥。GitHub 上的情况：' + result.summary);
-  } else say(explain(result), true);
+  } else {
+    // #38: the vault copy was only temporary and is now removed; the key is not stored.
+    await load();
+    say(explain(result) + ' ' + account + ' 的私钥没有导入；Cindy 显示的「凭证已保存」只是导入用的临时副本，已经清除。', true);
+  }
 };
 // A key copy left by a closed or crashed page is removed as soon as the settings page opens.
 async function clearLeftoverKey() {

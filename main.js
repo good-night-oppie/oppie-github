@@ -8,6 +8,7 @@ const HOST_ERRORS={
  OWNER_AUTHORIZATION_REQUIRED:['改规则集需要主人的授权引用。','QQ','先请主人在 Issue 上写授权，再带上 owner_authorization 链接。'],
  CONFIRMATION_TOO_LARGE:['确认卡要显示的内容太长。','发起这次调用的伙伴','把这次改动拆小一些再提交。'],
  OWNER_CONFIRMATION_REQUIRED:['需要主人在确认卡上点确认，这次没有确认。','主人','需要做这件事就重新发起，并在确认卡上点确认。'],
+ OWNER_CONFIRMATION_UNAVAILABLE:['确认卡没有弹出来，没有执行（Cindy 返回的原因在 details.hostErrorCode）。','主人','稍后在 Cindy 里重试；仍打不开就把 details.hostErrorCode 告诉维护者。'],
  REQUEST_TOO_LARGE:['请求太大，超过插件上限，没有发出。','发起这次调用的伙伴','把改动拆成多次提交，或改用 edit_file 只传改动部分。'],
  WORKER_UNAVAILABLE:['插件后台没有响应或已退出。','主人','在 Cindy 里重启插件后重试；写操作先读回确认结果。'],
  INVALID_REQUEST:['请求格式不对，没有发出。','发起这次调用的伙伴','按工具说明改正后重试。'],
@@ -18,7 +19,7 @@ const safeFailure=(code,execution)=>{const e=HOST_ERRORS[code];return e?{ok:fals
 cindy.onHostMessage(async function(message) {
   if (message.type !== 'tool-call') return;
   const methods = {github_accounts:'accounts',github_import_key:'import',github:'run',github_operations:'operations',github_review_queue:'review',github_author_cue_plan:'author_cue',inbox_service:'inbox_service'};
-  let sent=false,readOnly=false;
+  let sent=false,readOnly=false,hostErrorCode;
   try {
     if (!Object.prototype.hasOwnProperty.call(methods,message.tool)) throw Error('UNKNOWN_TOOL');
     let method=methods[message.tool],params=message.args||{};
@@ -41,6 +42,20 @@ cindy.onHostMessage(async function(message) {
       if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
       method='run_confirmed';params={input:params,confirmation:message.callId};
     }
+    // Key import by file path (#39, owner): the same card as the settings page before anything is stored.
+    else if(message.tool==='github_import_key'){
+      const a=params;
+      if(!a||typeof a!=='object'||Array.isArray(a)||Object.keys(a).some(k=>!['account','pem_path','replace'].includes(k)))throw Error('INVALID_REQUEST');
+      const seen=await cindy.node.request({method:'import',params:{...a,phase:'inspect'},callId:message.callId,cancelWithCall:true,timeoutMs:120000});
+      if(!seen||!seen.ok){const code=typeof seen?.errorCode==='string'&&/^[A-Z_]{1,64}$/.test(seen.errorCode)?seen.errorCode:'WORKER_UNAVAILABLE';await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure(code,'not_executed')});return;}
+      if(!seen.result||seen.result.ok!==true||typeof seen.result.card!=='string'||typeof seen.result.hash!=='string'){await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:seen.result&&seen.result.ok===false?seen.result:safeFailure('WORKER_UNAVAILABLE','not_executed')});return;}
+      const body='为 '+seen.result.card+'。确认后用本机 DPAPI 加密保存私钥'+(a.replace===true?'，并替换已保存的私钥':'')+'。';
+      if(body.length>300)throw Error('CONFIRMATION_TOO_LARGE');
+      const approval=await cindy.confirm({body,confirmText:'导入',cancelText:'取消',danger:true});
+      if(!approval.ok){hostErrorCode=typeof approval.errorCode==='string'&&/^[A-Z_]{1,64}$/.test(approval.errorCode)?approval.errorCode:'UNKNOWN';throw Error('OWNER_CONFIRMATION_UNAVAILABLE');}
+      if(!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
+      params={...a,phase:'store',hash:seen.result.hash};
+    }
     if(new TextEncoder().encode(JSON.stringify(params)).length>MAX_OPERATION_BYTES){await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure('REQUEST_TOO_LARGE','not_executed')});return;}
     sent=true;
     const response = await cindy.node.request({method,params,callId:message.callId,cancelWithCall:true,timeoutMs:120000});
@@ -50,9 +65,11 @@ cindy.onHostMessage(async function(message) {
     }
     await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:response.result});
   } catch (error) {
-    const before=['UNKNOWN_TOOL','OWNER_AUTHORIZATION_REQUIRED','CONFIRMATION_TOO_LARGE','OWNER_CONFIRMATION_REQUIRED'];
+    const before=['UNKNOWN_TOOL','OWNER_AUTHORIZATION_REQUIRED','CONFIRMATION_TOO_LARGE','OWNER_CONFIRMATION_REQUIRED','OWNER_CONFIRMATION_UNAVAILABLE','INVALID_REQUEST'];
     const code=!sent&&before.includes(error?.message)?error.message:'WORKER_UNAVAILABLE';
-    await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure(code,sent&&!readOnly?'unknown':'not_executed')});
+    const result=safeFailure(code,sent&&!readOnly?'unknown':'not_executed');
+    if(code==='OWNER_CONFIRMATION_UNAVAILABLE'&&hostErrorCode)result.details={hostErrorCode};
+    await cindy.send({type:'tool-result',callId:message.callId,ok:true,result});
   }
 });
 
@@ -68,7 +85,9 @@ cindy.onHostMessage(async function(message) {
   const clearKeyCopy = () => (typeof fetch === 'function' ? fetch('/secrets/app_private_key', { method: 'DELETE' }).catch(() => {}) : Promise.resolve());
   void clearKeyCopy();
   const answer = (id, result) => channel.postMessage({ type: 'settings-result', id, result });
-  const fail = (code) => ({ ok: false, errorCode: code, execution: 'not_executed' });
+  const fail = (code, details) => ({ ok: false, errorCode: code, execution: 'not_executed', ...(details ? { details } : {}) });
+  // #38: keep the host's own reason when it does not open the card (for example a body over 300 characters).
+  const unavailable = (approval) => approval?.errorCode === 'BUSY' ? fail('BUSY') : fail('OWNER_CONFIRMATION_UNAVAILABLE', { hostErrorCode: typeof approval?.errorCode === 'string' && /^[A-Z_]{1,64}$/.test(approval.errorCode) ? approval.errorCode : 'UNKNOWN' });
   const node = async (method, params) => {
     const response = await cindy.node.request({ method, params, timeoutMs: 120000 });
     if (!response || !response.ok) return fail(typeof response?.errorCode === 'string' && /^[A-Z_]{1,64}$/.test(response.errorCode) ? response.errorCode : 'WORKER_UNAVAILABLE');
@@ -92,7 +111,7 @@ cindy.onHostMessage(async function(message) {
         // Never abbreviate what the owner approves: an oversized summary must be split into smaller saves.
         if (body.length > 300) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
         const approval = await cindy.confirm({ body, confirmText: '保存', cancelText: '取消', danger: true });
-        if (!approval.ok) { answer(m.id, fail(approval.errorCode === 'BUSY' ? 'BUSY' : 'OWNER_CONFIRMATION_UNAVAILABLE')); return; }
+        if (!approval.ok) { answer(m.id, unavailable(approval)); return; }
         if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
         answer(m.id, await node('settings/save', { ...params, hash: plan.hash }));
         return;
@@ -104,10 +123,12 @@ cindy.onHostMessage(async function(message) {
         try {
           const seen = await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'inspect' });
           if (!seen.ok) { answer(m.id, seen); return; }
-          const body = '为 ' + seen.summary + '。确认后用本机 DPAPI 加密保存私钥' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
-          if (body.length > 900) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
+          // The host shows at most 300 characters (#38); the card is the short summary, the full one
+          // comes back with the result after the owner confirms.
+          const body = '为 ' + (typeof seen.card === 'string' ? seen.card : seen.summary) + '。确认后用本机 DPAPI 加密保存私钥' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
+          if (body.length > 300) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
           const approval = await cindy.confirm({ body, confirmText: '导入', cancelText: '取消', danger: true });
-          if (!approval.ok) { answer(m.id, fail('OWNER_CONFIRMATION_UNAVAILABLE')); return; }
+          if (!approval.ok) { answer(m.id, unavailable(approval)); return; }
           if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
           answer(m.id, await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'store', hash: seen.hash }));
         } finally { await clearKeyCopy(); }

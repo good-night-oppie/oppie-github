@@ -36,6 +36,7 @@ async function verifyKey({account,pem,config}){
 }
 const {explain}=require('./messages.cjs');
 const settings=require('./scope-settings.cjs').createSettings({store,loader:scopeConfig,verifyKey});
+const {importProposal}=require('./scope-settings.cjs');
 // Settings-page methods. main.js reaches them only from its own settings page and only after the
 // host confirmation card for propose→save and import_key; they are not Agent tools.
 const SETTINGS_METHODS=Object.freeze({'settings/read':'read','settings/propose':'propose','settings/save':'save','settings/import_key':'importKey'});
@@ -76,6 +77,10 @@ async function dispatch(method,args,host){
   await store.list();return queue[action](input);
  }
  if(method==='import'){
+  // #39 (owner): an import by file path also needs the owner's card. 'inspect' reads the file, checks the
+  // App on GitHub and returns the card and a hash; 'store' (only after main.js got a confirmation)
+  // repeats both and saves the key only when the hash is the one the owner confirmed.
+  if(!args||typeof args!=='object'||Object.keys(args).some(k=>!['account','pem_path','replace','phase','hash'].includes(k))||!['inspect','store'].includes(args.phase)||(args.phase==='store'&&(typeof args.hash!=='string'||!/^[0-9a-f]{64}$/.test(args.hash))))rejectBeforeExecution('INVALID_IMPORT');
   let importConfig;try{importConfig=await scopeConfig();}catch(e){rejectBeforeExecution('INVALID_SCOPE_CONFIGURATION',e.reason);}
   if(!configuredAccount(args.account,importConfig)||typeof args.pem_path!=='string'||!path.isAbsolute(args.pem_path))rejectBeforeExecution('INVALID_IMPORT');
   const st=await fs.lstat(args.pem_path);if(!st.isFile()||st.isSymbolicLink()||st.size>32768)rejectBeforeExecution('INVALID_KEY_FILE');
@@ -86,9 +91,12 @@ async function dispatch(method,args,host){
    verification=await verifyKey({account:args.account,pem,config:await scopeConfig()});
   }finally{bytes.fill(0);pem='';bytes=null;}
   if(!verification.ok)return verification;
+  const proposal=importProposal(args.account,fingerprint,verification.result,args.replace);
+  if(args.phase==='inspect')return {ok:true,account:args.account,summary:proposal.summary,card:proposal.card,hash:proposal.hash};
+  if(args.hash!==proposal.hash)rejectBeforeExecution('PROPOSAL_CHANGED');
   const imported=await store.importKey({account:args.account,pem_path:args.pem_path,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:verification.result.warnings?.length?{}:{appSlug:verification.result.app_slug}});
   if(imported.fingerprint!==fingerprint)throw Error('KEY_CHANGED_DURING_IMPORT');
-  return {ok:true,account:imported,verification:verification.result};
+  return {ok:true,account:imported,verification:verification.result,summary:proposal.summary};
  }
  rejectBeforeExecution('UNKNOWN_METHOD');
 }
