@@ -92,6 +92,25 @@ Owner organisation; App and installation IDs of the twelve built-in accounts; pe
 
 The key is encrypted with DPAPI entropy derived from the account and App ID (`installationId` is recorded as `auto` for settings-page accounts), so a later installation change does not make the stored key unreadable.
 
+## Upgrading from settings.2-6 (QQ on #34: an upgrade must not stop anyone)
+
+- A signed `scope-config.json` saved by settings.2-6 still loads. Its `repositories`, `optionalRepositories`, `twoRepositories`, `repositoryRoles` and `reviewOperations`, and the `role` and `operations` of added accounts, are ignored: the installation decides (owner 2026-11-16), including any earlier `role: none`. The next save writes the current format. New proposals from the settings page must use the current format.
+- An added account saved then (for example AD) keeps its `installationId` in the configuration, only because the private key imported then is DPAPI-bound to it. It never selects the installation or grants anything; the installation is still looked up on GitHub on every call. The settings page and the save path keep it while the App ID is unchanged; it cannot be changed or added for a new account.
+- If an added account's stored key no longer matches its App identity (for example after its App ID was changed in the settings page), only that account fails, with `KEY_IMPORTED_FOR_OTHER_APP`, and its key can be imported again; the key store and every other account keep working. A row of a built-in account that does not match its compiled pins still makes the store fail closed.
+- The twelve built-in accounts need nothing: without a configuration file they use the compiled values, and their keys are bound to the compiled App and installation IDs as before.
+
+## Caching
+
+None in this version. Every call reads `/app` and the installation again and requests a new token for that one operation, then drops it, so a narrowed installation applies to the very next call. Caching (ADR 0003 section 5) comes in a later step.
+
+## `identity` output
+
+The `identity` token asks for `metadata:read` only. Fields:
+- kept: `app_id`, `app_slug`, `owner`, `installationRepositorySelection`, `scopeRevision`, `scopeConfigSource`, `scopeConfigDigest`, and `expires_at` (with `repo`);
+- added: `installation_id`, `installationPermissions` (what the installation actually holds), `availableOperations` (operations the installation allows), `repository` (`{id, full_name}`, with `repo`), and `installationRepositories` as `{complete, repositories}`;
+- removed: `permissions` (role permissions), `repositories` (the old repository list) and `installationRepositoryCount`.
+Without `repo` no single-repository token is requested; one `metadata:read` token lists the installation's repositories.
+
 ## Trust boundary
 
 Changes are made only through the settings page and the host confirmation card. As in ADR 0002, a process already running as the same OS user is out of scope (see Integrity). Plugin pages are isolated from other plugins: each plugin has its own Electron session partition and `cindy-ghost://<id>` origin (Cindy 0.1.136 `ghostWebviewPartition.ts`, `electronSandboxAdapter.ts`), so other plugins cannot post to this plugin's `oppie-github-settings` BroadcastChannel.
