@@ -138,3 +138,14 @@ test('INSTALLATION_MISMATCH for a settings-page account names the failed check',
  const r=await client.run({account:'ad',repo:'MontClip',operation:'identity',args:{}});
  assert.equal(r.errorCode,'INSTALLATION_MISMATCH');assert.deepEqual(r.details.failed.map(x=>x.check),['suspended']);
 });
+// settings.8-11 codes (#33 e8c1be06): repository ID resolution, keys imported for another App, workflow files.
+test('settings.8-11 codes say what happened and who acts next, without secrets',()=>{
+ const rr=explain({ok:false,errorCode:'REPOSITORY_RESOLUTION_FAILED',execution:'not_executed'});
+ assert.ok(rr.message.includes('仓库 ID')&&rr.message.includes('没有执行'));assert.equal(rr.next.who,'发起这次调用的伙伴');
+ const ko=explain({ok:false,errorCode:'KEY_IMPORTED_FOR_OTHER_APP',execution:'not_executed'});
+ assert.ok(ko.message.includes('只停这一个账号'));assert.equal(ko.next.who,'主人');assert.ok(ko.next.action.includes('重新导入'));
+ const wf=explain({ok:false,errorCode:'INSTALLATION_PERMISSION_MISSING',execution:'not_executed',details:{app:'DejaOppieXYZ',missing:[{permission:'workflows',required:'write',installed:'none'}],workflowFiles:['.github/workflows/test.yml'],appPermissionsUrl:'https://github.com/organizations/good-night-oppie/settings/apps/dejaoppiexyz/permissions',installationUrl:'https://github.com/organizations/good-night-oppie/settings/installations/179806356'}});
+ assert.ok(wf.message.includes('workflows:write（现为 none）'));assert.ok(wf.message.includes('.github/workflows/test.yml 在 .github/workflows/ 下'));assert.ok(wf.message.includes('installations/179806356'));assert.equal(wf.next.who,'主人');
+ const oc=explain({ok:false,errorCode:'OWNER_CONFIRMATION_REQUIRED',execution:'not_executed'});assert.equal(oc.next.who,'主人');
+ for(const r of [rr,ko,wf,oc])assert.doesNotMatch(JSON.stringify(r),SECRETISH);
+});
