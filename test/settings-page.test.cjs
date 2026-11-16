@@ -201,10 +201,13 @@ test('import card (#38): an App with many permissions and repositories gets a ca
  const config=plus(await baseConfig(settings),'ad',AD);
  const plan=await settings.propose({config,expectedRevision:0});await settings.save({config,expectedRevision:0,hash:plan.hash});
  const seen=await settings.importKey({account:'ad',phase:'inspect'},{secrets:{app_private_key:pem}});
- assert.equal(seen.card,card);assert.equal(seen.summary,describeInstallation('ad',wide));
+ // The card the owner confirms names the key too (#39): the same short fingerprint on both import paths.
+ const fp=crypto.createHash('sha256').update(crypto.createPublicKey(crypto.createPrivateKey(pem)).export({type:'spki',format:'der'})).digest('hex');
+ assert.equal(seen.card,describeInstallationCard('ad',wide,fp));assert.ok(seen.card.includes('私钥指纹 '+fp.slice(0,8)+'…'+fp.slice(-4)));assert.ok(seen.card.length<=220);
+ assert.equal(seen.summary,describeInstallation('ad',wide));
  const b=bridge({nodeResult:r=>r.params.phase==='inspect'?seen:{ok:true,account:'ad',summary:seen.summary}});
  const r=await b.send({type:'settings-import-key',id:'w1',account:'ad'});
- assert.equal(b.confirms.length,1);assert.ok(b.confirms[0].body.length<=300,String(b.confirms[0].body.length));assert.ok(b.confirms[0].body.includes(card));
+ assert.equal(b.confirms.length,1);assert.ok(b.confirms[0].body.length<=300,String(b.confirms[0].body.length));assert.ok(b.confirms[0].body.includes(seen.card));
  assert.equal(r.result.ok,true);assert.equal(r.result.summary,seen.summary,'the full summary comes back after confirming');
 });
 test('import card (#38): an oversized body never reaches the host; a host refusal keeps its own code',async()=>{
@@ -222,11 +225,39 @@ test('import card (#38): an oversized body never reaches the host; a host refusa
   assert.equal(JSON.stringify((await odd.send({type,id:'w4',...extra})).result.details),JSON.stringify({hostErrorCode:'UNKNOWN'}),type);
  }
 });
-test('import by file path (#38): github_import_key has no plugin card, so the 300-character limit never applies',async()=>{
+// #39 (owner, via QQ in #38 6911291761): github_import_key shows the same card before anything is stored.
+function toolHost({inspect,confirm=async()=>({ok:true,confirmed:true})}={}){
  const confirms=[],requests=[],sent=[];let handler;
- vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{cindy:{onHostMessage:f=>handler=f,confirm:async b=>{confirms.push(b);return {ok:true,confirmed:true};},send:async m=>sent.push(m),node:{request:async r=>{requests.push(r);return {ok:true,result:{ok:true}};}}},TextEncoder,JSON,Error,Object});
- await handler({type:'tool-call',tool:'github_import_key',callId:'c1',args:{account:'ad',pem_path:'C:/keys/ad.pem'}});
- assert.equal(confirms.length,0);assert.deepEqual(requests.map(r=>r.method),['import']);assert.equal(sent[0].result.ok,true);
+ const card='账号 ad：App adoppiexyz（ID 5764947），私钥指纹 607fe064…a171，安装 182084517，全部仓库 56 个，权限 17 项';
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{cindy:{onHostMessage:f=>handler=f,confirm:async b=>{confirms.push(b);return confirm(b);},send:async m=>sent.push(m),node:{request:async r=>{requests.push(r);return r.params.phase==='inspect'?(inspect?inspect(r):{ok:true,result:{ok:true,account:'ad',summary:'full',card,hash:'d'.repeat(64)}}):{ok:true,result:{ok:true,stored:true}};}}},TextEncoder,JSON,Error,Object});
+ const call=async args=>{await handler({type:'tool-call',tool:'github_import_key',callId:'c1',args});return sent.at(-1).result;};
+ return {call,confirms,requests,card};
+}
+test('import by file path (#39): the owner confirms the same card first; only then is the key stored',async()=>{
+ const h=toolHost();const r=await h.call({account:'ad',pem_path:'C:/keys/ad.pem'});
+ assert.equal(r.ok,true);assert.equal(h.confirms.length,1);assert.ok(h.confirms[0].body.length<=300);assert.ok(h.confirms[0].body.includes(h.card));assert.equal(h.confirms[0].danger,true);
+ assert.deepEqual(h.requests.map(x=>[x.method,x.params.phase]),[['import','inspect'],['import','store']]);
+ assert.equal(h.requests[1].params.hash,'d'.repeat(64),'the store step carries the hash of what the owner saw');
+ assert.ok(!JSON.stringify(h.confirms).includes('C:/keys'),'the card shows no key path');
+});
+test('import by file path (#39): cancelled, refused or unavailable cards store nothing and keep the host code',async()=>{
+ const cancel=toolHost({confirm:async()=>({ok:true,confirmed:false})});
+ assert.equal((await cancel.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'OWNER_CONFIRMATION_REQUIRED');
+ assert.deepEqual(cancel.requests.map(x=>x.params.phase),['inspect']);
+ for(const code of ['RATE_LIMITED','BUSY','UNAVAILABLE']){
+  const h=toolHost({confirm:async()=>({ok:false,errorCode:code})});const r=await h.call({account:'ad',pem_path:'C:/keys/ad.pem'});
+  assert.equal(r.errorCode,'OWNER_CONFIRMATION_UNAVAILABLE',code);assert.equal(r.details.hostErrorCode,code);assert.equal(r.execution,'not_executed');
+  assert.deepEqual(h.requests.map(x=>x.params.phase),['inspect'],code+' stores nothing');
+ }
+ const long=toolHost({inspect:()=>({ok:true,result:{ok:true,card:'x'.repeat(400),hash:'d'.repeat(64)}})});
+ assert.equal((await long.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'CONFIRMATION_TOO_LARGE');assert.equal(long.confirms.length,0);
+ assert.deepEqual(long.requests.map(x=>x.params.phase),['inspect']);
+ const failed=toolHost({inspect:()=>({ok:true,result:{ok:false,errorCode:'INSTALLATION_NOT_FOUND',execution:'not_executed'}})});
+ assert.equal((await failed.call({account:'ad',pem_path:'C:/keys/ad.pem'})).errorCode,'INSTALLATION_NOT_FOUND');assert.equal(failed.confirms.length,0);
+ // A caller cannot skip the card by sending its own phase or hash.
+ const forged=toolHost();
+ assert.equal((await forged.call({account:'ad',pem_path:'C:/keys/ad.pem',phase:'store',hash:'d'.repeat(64)})).errorCode,'INVALID_REQUEST');
+ assert.equal(forged.requests.length,0);assert.equal(forged.confirms.length,0);
 });
 test('settings page (#38): a failed import says the key was not stored and shows the host code',()=>{
  const src=fs.readFileSync(path.join(__dirname,'../settings.js'),'utf8');
