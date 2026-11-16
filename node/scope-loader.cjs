@@ -19,7 +19,7 @@ const FORMAT='oppie-scope-config/v1';
 const CONFIG_FILE='scope-config.json',KEY_FILE='scope-config.key';
 function invalid(reason){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';e.reason=reason;throw e;}
 function hmac(key,text){return crypto.createHmac('sha256',key).update(text,'utf8').digest('hex');}
-function stampOf(file){try{const s=fs.statSync(file);return s.size+':'+s.mtimeMs+':'+s.ino;}catch(e){if(e.code==='ENOENT')return 'none';return 'error';}}
+function stampOf(file){try{const s=fs.statSync(file);return s.size+':'+s.mtimeMs+':'+s.ctimeMs+':'+s.ino;}catch(e){if(e.code==='ENOENT')return 'none';return 'error';}}
 
 // Verify an envelope against the sealed key state. The config revision may equal the sealed
 // revision or be exactly one ahead (a save wrote the configuration but not yet the key state).
