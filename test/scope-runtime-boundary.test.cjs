@@ -8,7 +8,10 @@ test('actual worker dispatcher refuses injected scope/owner flags and unpublishe
  const fakeProcess=new EventEmitter();fakeProcess.stdin=new EventEmitter();fakeProcess.stdout={write:s=>output.push(JSON.parse(s))};fakeProcess.exit=()=>{};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../node/runtime.cjs'),'utf8'),{__dirname:path.join(__dirname,'../node'),process:fakeProcess,Buffer,console,require:name=>{
   if(name==='./rpc-input.cjs')return {createReceiver:options=>{const r=require('../node/rpc-input.cjs').createReceiver(options);handler=line=>r.push(Buffer.from(line+'\n'));return r;}};
-  if(name==='./store.cjs')return {paths:{root:'synthetic-store'},load:async()=>{loads++;throw Error('Credentials must not be read');}};
+  if(name==='./scope-config.cjs')return require('../node/scope-config.cjs');
+  if(name==='./scope-settings.cjs')return require('../node/scope-settings.cjs');
+  if(name==='./scope-loader.cjs')return require('../node/scope-loader.cjs');
+  if(name==='./store.cjs')return {setAccountResolver:()=>{},paths:{root:'synthetic-store'},load:async()=>{loads++;throw Error('Credentials must not be read');}};
   if(name==='./core.cjs')return require('../node/core.cjs');
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
   if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>({ok:false}),stop:async()=>({ok:true})})};
