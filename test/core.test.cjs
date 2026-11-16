@@ -23,7 +23,7 @@ function fixture(options={}){
   if(path==='/app'){const slug=options.slug||(account.account==='reviewinbox'?'reviewinboxoppiexyz':'oppie-agent-'+account.account);data={id:options.wrongApp?9:account.app_id,slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/'+slug};}
   else if(path==='/app/installations/'+account.installation_id)data={id:account.installation_id,app_id:account.app_id,account:{login:options.wrongOwner?'bad':'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:options.permissions||{...perms,...(account.account==='pg'?{administration:'write'}:{})}};
   else if(path.endsWith('/access_tokens')){
-   data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:perms};
+   data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:JSON.parse(init.body).permissions||perms};
    const requested=JSON.parse(init.body).repository_ids;
    const installed=repos;
    const selected=requested?installed.repositories.filter(r=>requested.includes(r.id)):installed.repositories;
@@ -104,7 +104,9 @@ test('identity verifies app, installation and exact repos; credentials never ret
  assert.ok(!JSON.stringify(r).includes('secret-token'));assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
  const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens'));
  assert.deepEqual(grants[0].parsed,{permissions:{metadata:'read'}});
- assert.deepEqual(grants[1].parsed.repository_ids,Object.values(CATALOG));assert.deepEqual(grants[1].parsed.permissions,expected);
+ assert.deepEqual(grants[1].parsed.repository_ids,Object.values(CATALOG));
+ // Owner 2026-11-16: identity only reads, so its token asks for contents:read.
+ assert.deepEqual(grants[1].parsed.permissions,{...expected,contents:'read'});
 });
 test('account mandatory and unknown account, repository escapes, operation rejected before key read',async()=>{
  const f=fixture();for(const value of [ {...input('identity'),account:undefined},{...input('identity'),account:'EdwardTang'},{...input('identity'),repo:'other/MontClip'},{...input('identity'),operation:'raw_request'},input('get_contents',{path:'../secret'}),input('get_contents',{path:'a%2fb'}),input('create_branch',{branch:'bad..ref',sha:SHA}),input('identity',{url:'https://evil.test'})]){
@@ -143,21 +145,46 @@ test('ReviewInbox actual App identity uses ordinary write permissions',async()=>
  assert.equal(r.ok,true);assert.equal(r.result.app_id,5687106);assert.equal(r.receipt.installation_id,180305629);
  assert.equal(r.result.app_slug,'reviewinboxoppiexyz');
  assert.deepEqual(r.result.permissions,{contents:'write',issues:'write',pull_requests:'write',metadata:'read'});
- assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens'))[1].parsed.permissions,r.result.permissions);
+ assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens'))[1].parsed.permissions,{...r.result.permissions,contents:'read'});
  const posted=await f.client.run(input('submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'Finding'},'reviewinbox'));
  assert.equal(posted.ok,true);assert.equal(posted.receipt.app_slug,'reviewinboxoppiexyz');
 });
 
 test('ReviewInbox administration stays refused before key access',async()=>{const f=fixture({account:'reviewinbox'});for(const operation of ['admin_get','admin_update'])assert.equal((await f.client.run(input(operation,operation==='admin_update'?{allow_squash_merge:true}:{},'reviewinbox'))).errorCode,'ADMIN_ACCOUNT_REQUIRED');assert.equal(f.credentialsCalls(),0);});
 
-test('ReviewInbox does not accept invented legacy slug or elevated installation permissions',async()=>{
- for(const options of [{slug:'oppie-agent-reviewinbox'},{permissions:{...expected,contents:'read'}},{permissions:{...expected,administration:'write'}}]){
-  const f=fixture({account:'reviewinbox',...options});const r=await f.client.run(input('identity',{},'reviewinbox'));
-  assert.equal(r.ok,false);assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
+test('ReviewInbox does not accept an invented legacy slug',async()=>{
+ const f=fixture({account:'reviewinbox',slug:'oppie-agent-reviewinbox'});const r=await f.client.run(input('identity',{},'reviewinbox'));
+ assert.equal(r.ok,false);assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
+});
+// Owner 2026-11-16 (via QQ): permissions follow the App's actual installation. A broader installation is
+// accepted and never forwarded; a narrower one fails only for operations that need what is missing,
+// naming the missing level and where to add it.
+test('installation permissions: broader is accepted and not forwarded, missing fails only where needed',async()=>{
+ const broad=fixture({account:'reviewinbox',permissions:{...expected,administration:'write',actions:'write'}});
+ const r=await broad.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true,r.errorCode);
+ assert.deepEqual(broad.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repository_ids).at(-1).parsed.permissions,{...expected,contents:'read'});
+ assert.deepEqual(r.result.installationPermissions,{...expected,administration:'write',actions:'write'});assert.deepEqual(r.result.missingInstallationPermissions,[]);
+ const narrow=fixture({account:'reviewinbox',permissions:{...expected,contents:'read'}});
+ const id=await narrow.client.run(input('identity',{},'reviewinbox'));assert.equal(id.ok,true,id.errorCode);
+ assert.deepEqual(id.result.missingInstallationPermissions,[{permission:'contents',required:'write',installed:'read'}]);
+ const w=await narrow.client.run(input('create_branch',{branch:'x/y',sha:SHA},'reviewinbox'));
+ assert.equal(w.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(w.execution,'not_executed');
+ assert.deepEqual(w.details.missing,[{permission:'contents',required:'write',installed:'read'}]);
+ assert.match(w.details.fix,/contents:write \(installed: read\)/);
+ assert.equal(w.details.appPermissionsUrl,'https://github.com/organizations/good-night-oppie/settings/apps/reviewinboxoppiexyz/permissions');
+ assert.equal(w.details.installationUrl,'https://github.com/organizations/good-night-oppie/settings/installations/180305629');
+ // The worker adds the owner-facing Chinese message.
+ const said=require('../node/messages.cjs').explain(w);
+ assert.match(said.message,/的安装缺少：contents:write（现为 read）/);assert.ok(said.message.includes(w.details.appPermissionsUrl)&&said.message.includes(w.details.installationUrl));
+ assert.equal(require('../node/messages.cjs').explain(r),r);
+ assert.equal(narrow.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repository_ids).length,1,'no token minted for the refused write');
+ for(const permissions of [{...expected,issues:'read'},{contents:'write',pull_requests:'write',metadata:'read'}]){
+  const f=fixture({permissions});const x=await f.client.run(input('identity'));
+  assert.equal(x.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
  }
 });
 test('extra permissions, extra repositories and duplicate repos fail closed',async()=>{
- for(const option of [{permissions:{...expected,administration:'write'}},{repositories:{...repos,total_count:3}},{repositories:{total_count:2,repositories:[repos.repositories[0],repos.repositories[0]]}}]){const f=fixture(option);const r=await f.client.run(input('identity'));assert.equal(r.ok,false);assert.ok(['PERMISSION_MISMATCH','INSTALLATION_REPOSITORY_SCOPE_MISMATCH'].includes(r.errorCode));}
+ for(const option of [{repositories:{...repos,total_count:3}},{repositories:{total_count:2,repositories:[repos.repositories[0],repos.repositories[0]]}}]){const f=fixture(option);const r=await f.client.run(input('identity'));assert.equal(r.ok,false);assert.ok(['PERMISSION_MISMATCH','INSTALLATION_REPOSITORY_SCOPE_MISMATCH'].includes(r.errorCode));}
 });
 test('ordinary account cannot request admin; QQ uses ruleset-only administration',async()=>{
  const f=fixture();assert.equal((await f.client.run(input('admin_get'))).errorCode,'ADMIN_ACCOUNT_REQUIRED');assert.equal(f.calls.length,0);
@@ -223,7 +250,7 @@ const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entri
 function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||riSet(riInstall))};}});}
 test('ReviewInbox validates seven installation and execution repositories',async()=>{
  const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,7);assert.equal(r.result.repositories.length,7);
- const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(CATALOG).sort());assert.deepEqual(request.permissions,{contents:'write',issues:'write',pull_requests:'write',metadata:'read'});
+ const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(CATALOG).sort());assert.deepEqual(request.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
 });
 test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail closed',async()=>{
  const full=riSet(riInstall);
@@ -367,8 +394,9 @@ test('#16 only QQ enqueue_pull requests a contents:write token; every other call
  assert.equal((await enq.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'))).ok,true);assert.deepEqual(tokenRequests(enq.calls),['write']);
  const qqOps=[['identity',{}],['get_pull',{number:7}],['list_rulesets',{}],['submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'ok'}],['dismiss_review',{number:7,review_id:4,message:'m'}]];
  for(const [operation,args] of qqOps){const f=fixture({account:'qq'});await f.client.run(input(operation,args,'qq'));assert.deepEqual(tokenRequests(f.calls),['read'],operation);}
- const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['write']);
- const bb=fixture();await bb.client.run(input('get_pull',{number:7}));assert.deepEqual(tokenRequests(bb.calls),['write']);
+ // Owner 2026-11-16: every account's read-only call asks for contents:read.
+ const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['read']);
+ const bb=fixture();await bb.client.run(input('get_pull',{number:7}));assert.deepEqual(tokenRequests(bb.calls),['read']);
 });
 test('#16 enqueue_pull refuses a token GitHub narrowed below contents:write before any GraphQL call',async()=>{
  const f=fixture({account:'qq',override(path,init){if(path.endsWith('/access_tokens')&&JSON.parse(init.body).repository_ids)return {status:201,data:{token:'secret-token-narrow',expires_at:new Date(NOW+3600000).toISOString(),permissions:{contents:'read',issues:'write',pull_requests:'write',metadata:'read',administration:'write'}}};}});
