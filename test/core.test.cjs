@@ -514,3 +514,27 @@ test('a token that GitHub returns without the workflows:write that was requested
  const r=await f.client.run(input('update_file',wfFile(),'deja','oppie-github'));
  assert.equal(r.errorCode,'TOKEN_PERMISSION_MISMATCH');assert.equal(f.calls.some(c=>c.method==='PUT'),false);
 });
+
+// QQ on #34 (5914728822 point 2): nothing is cached; narrowing the installation applies to the next
+// call and no earlier token is reused.
+test('no cache: narrowing the installation on GitHub applies to the very next call, with a new token each time',async()=>{
+ const f=fixture({account:'deja'});
+ assert.equal((await f.client.run(input('get_issue',{number:1},'deja','MontClip'))).ok,true);
+ f.remote.installed=INSTALLED.filter(n=>n!=='MontClip');
+ const gone=await f.client.run(input('get_issue',{number:1},'deja','MontClip'));
+ assert.equal(gone.errorCode,'REPOSITORY_NOT_INSTALLED');assert.equal(gone.execution,'not_executed');
+ f.remote.installed=INSTALLED;f.remote.permissions={...expected,issues:'read'};
+ const narrowed=await f.client.run(input('comment_issue',{number:1,body:'x'},'deja','MontClip'));
+ assert.equal(narrowed.errorCode,'INSTALLATION_PERMISSION_MISSING');
+ const business=f.calls.filter(c=>c.path.includes('/issues/'));
+ assert.equal(business.length,1,'only the first call reached the repository');
+ const tokens=f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.parsed);
+ assert.equal(tokens.length,2,'a new token for each call that got that far; none for the refused permission');
+ assert.equal(f.calls.filter(c=>c.path==='/app').length,3,'the App is read again on every call');
+});
+test('update_file to the default branch is refused before any file read or write',async()=>{
+ const f=fixture();
+ const r=await f.client.run(input('update_file',{path:'a.txt',branch:'main',expected_sha:null,message:'x',content_base64:'dGVzdA=='}));
+ assert.equal(r.errorCode,'DEFAULT_BRANCH_WRITE_REFUSED');assert.equal(r.execution,'not_executed');
+ assert.equal(f.calls.some(c=>c.path.includes('/contents/')),false);assert.equal(f.calls.some(c=>c.method==='PUT'),false);
+});
