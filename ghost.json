@@ -1,18 +1,28 @@
 {
   "schemaVersion": 3,
-  "minCindyVersion": "0.1.126",
+  "minCindyVersion": "0.1.136",
   "id": "oppie-github",
   "name": "伙伴 GitHub",
   "description": "显式选择伙伴 GitHub App 身份，操作指定 MontClip 仓库。Windows 使用 DPAPI，Linux 使用 Secret Service 加密保护凭据；不提供伙伴间强制身份隔离。",
-  "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 仅作 COMMENT 评审。",
-  "version": "1.5.0-preview.8-seven-roles.2",
+  "whenToUse": "伙伴通过自己的 GitHub App 操作各自获准仓库的 Issue、PR 和代码；ReviewInbox 可发 COMMENT、APPROVE、REQUEST_CHANGES 评审（主人 2026-11-15 决定）。",
+  "version": "1.5.0-preview.10-settings.2",
   "command": "oppie-github",
   "entry": "main.js",
   "launch": "resident",
   "node": {
     "entry": "node/runtime.cjs",
     "protocol": "json-rpc-stdio",
-    "lifecycle": "resident"
+    "lifecycle": "resident",
+    "secretBindings": [
+      {
+        "key": "app_private_key",
+        "label": "伙伴 GitHub App 私钥（PEM）",
+        "methods": [
+          "settings/import_key"
+        ],
+        "hint": "只在设置页导入私钥时填写；导入后会自动清除。"
+      }
+    ]
   },
   "tools": [
     {
@@ -41,20 +51,8 @@
         "properties": {
           "account": {
             "type": "string",
-            "enum": [
-              "bb",
-              "cindy",
-              "deja",
-              "dd",
-              "gg",
-              "jj",
-              "pg",
-              "qq",
-              "rea",
-              "video",
-              "vv",
-              "reviewinbox"
-            ]
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "伙伴账号别名；内置 bb/cindy/deja/dd/gg/jj/pg/qq/rea/video/vv/reviewinbox，另可在 scope-config.json 中配置新账号（如 ad）。"
           },
           "pem_path": {
             "type": "string"
@@ -78,32 +76,13 @@
         "properties": {
           "account": {
             "type": "string",
-            "enum": [
-              "bb",
-              "cindy",
-              "deja",
-              "dd",
-              "gg",
-              "jj",
-              "pg",
-              "qq",
-              "rea",
-              "video",
-              "vv",
-              "reviewinbox"
-            ]
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "伙伴账号别名；内置 bb/cindy/deja/dd/gg/jj/pg/qq/rea/video/vv/reviewinbox，另可在 scope-config.json 中配置新账号（如 ad）。"
           },
           "repo": {
             "type": "string",
-            "enum": [
-              "MontClip",
-              "MontClip-Cindy",
-              "montclip-rsi",
-              "rsi-playbooks",
-              "oppie-github",
-              "sglang-review-inbox",
-              "cindy"
-            ]
+            "pattern": "^[A-Za-z0-9._-]{1,100}$",
+            "description": "good-night-oppie 下的仓库名（不带 owner）；必须在配置名单中，否则返回 REPOSITORY_NOT_ALLOWED 且不执行。"
           },
           "operation": {
             "type": "string"
@@ -243,6 +222,10 @@
       }
     ]
   },
-  "releaseNotes": "2026-11-15 P0: App installations may contain more repositories than the catalog (owner granted all repositories; repository_selection 'all' accepted). The target repository must still be in the catalog (REPOSITORY_NOT_ALLOWED before credentials) and execution tokens stay narrowed to catalog repositories with the exact token-set check. No other behaviour change.",
-  "confirm": true
+  "releaseNotes": "2026-11-15: Plugin settings page to add teammate GitHub Apps (name, slug, App ID, installation ID, role, allowed operations) and repositories; changes take effect on the next call without restart. Every save shows a host confirmation card with the full change and uses a revision check; an audit line is recorded. App private keys are entered only in the settings page secret field, verified against GitHub and stored with the existing DPAPI store. Configured accounts can never be admin or use QQ-only operations; ReviewInbox review events are unchanged (owner decision 2026-11-15). Builds on the 1.5.0-preview.8-seven-roles.2 all-repositories fix. settings.2 (QQ review 2026-11-16): the configuration file is signed with a DPAPI-sealed HMAC key and revision, read through the owner-only ACL check, so hand edits, replays and deletions fail closed; the confirmation card lists who can write an added repository; leftover key copies are removed; whenToUse states the current ReviewInbox review events.",
+  "confirm": true,
+  "settingsHtml": "settings.html",
+  "setup": {
+    "requires": []
+  }
 }
