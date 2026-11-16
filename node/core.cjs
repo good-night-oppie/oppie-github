@@ -34,7 +34,7 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 // #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
 // write) requests contents:write, which the QQ installation already holds.
-function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':a.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
 function checkPermissions(actual,a,phase='execution',operation){
  const expected=permissions(a,operation),rank={none:0,read:1,write:2};
  // PG may have additional owner-granted installation permissions. Never request
@@ -77,12 +77,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
    let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
    const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
-   if(account.account==='reviewinbox'){
-    if(['create_branch','update_file','edit_file','commit_files'].includes(operation))bad('READ_ONLY_CONTENTS');
-    if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
-    if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
-   }
-   // #22: on the cindy fork DD and QQ may only read and review; DD reviews are COMMENT only.
+   // Repository restrictions supplement global account guards.
    const restriction=repositoryRestriction(account.account,repo);
    if(restriction){
     if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
