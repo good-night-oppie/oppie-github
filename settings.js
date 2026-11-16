@@ -59,7 +59,7 @@ function render() {
     : '配置修订号 r' + state.revision + (state.source === 'default' ? '（使用内置默认值）' : '') + '。保存后下一次调用立即生效，不用重启。';
   $('#status').className = state.source === 'invalid' ? 'error' : 'muted';
   if (!draft) return;
-  const roleText = { write: '读写', review: '只读+评审', comment_review: '仅 COMMENT 评审' };
+  const roleText = { write: '读写', reviewer: '只读+评论+评审', review: '只读+评审', comment_review: '仅 COMMENT 评审' };
   const names = [...new Set([...state.builtinAccounts, ...Object.keys(draft.newAccounts)])];
   const tbody = $('#accounts tbody'); tbody.replaceChildren();
   for (const name of names) {
@@ -68,7 +68,9 @@ function render() {
     const a = draft.newAccounts[name];
     tr.append(td(name + (enabled ? '' : '（停用）')));
     tr.append(td(a ? a.appName + ' · ' + a.appSlug + ' · App ' + a.appId + ' · 安装 ' + a.installationId : '内置'));
-    tr.append(td(a ? roleText[a.role] + (a.operations ? '，' + a.operations.length + ' 项操作' : '') : '按代码'));
+    const blocked = Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none');
+    tr.append(td((a ? roleText[a.role] + (a.operations ? '，' + a.operations.length + ' 项操作' : '') + (a.allowBroaderInstallation ? '，安装权限可更宽' : '') : '按代码')
+      + (blocked.length ? '，不可用：' + blocked.join('、') : '')));
     tr.append(td(state.keys.includes(name) ? '已保存' : '未导入'));
     const actions = document.createElement('td');
     actions.append(button(enabled ? '停用' : '启用', () => {
@@ -102,6 +104,7 @@ function render() {
     }));
     tr.append(actions); rbody.append(tr);
   }
+  renderAccountRepos();
   const select = $('#key-account'); const keep = select.value; select.replaceChildren();
   for (const name of state.config.accounts) { const o = document.createElement('option'); o.value = name; o.textContent = name; select.append(o); }
   if (state.config.accounts.includes(keep)) select.value = keep;
@@ -115,11 +118,24 @@ function renderOps() {
     c.type = 'checkbox'; c.value = op; l.append(c, document.createTextNode(op)); box.append(l);
   }
 }
+// Usable repositories for the account in the form. Unchecked = repository role 'none' for that
+// account (e.g. whether AD may use cindy is the owner's choice here, not in code).
+function renderAccountRepos(uncheckedFor) {
+  const box = $('#acc-repos'); if (!box || !draft) return;
+  const unchecked = uncheckedFor ?? new Set([...box.querySelectorAll('input')].filter((c) => !c.checked).map((c) => c.value));
+  box.replaceChildren();
+  for (const repo of Object.keys(draft.repositories)) {
+    const l = document.createElement('label'); const c = document.createElement('input');
+    c.type = 'checkbox'; c.value = repo; c.checked = !unchecked.has(repo); l.append(c, document.createTextNode(repo)); box.append(l);
+  }
+}
 function fillAccount(name) {
   const a = draft.newAccounts[name]; $('#account-form-box').open = true;
   $('#acc-name').value = name; $('#acc-app-name').value = a.appName; $('#acc-slug').value = a.appSlug;
   $('#acc-app-id').value = a.appId; $('#acc-install-id').value = a.installationId; $('#acc-role').value = a.role;
   for (const c of $('#acc-ops').querySelectorAll('input')) c.checked = !!a.operations?.includes(c.value);
+  $('#acc-broad').checked = a.allowBroaderInstallation === true;
+  renderAccountRepos(new Set(Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none')));
 }
 $('#acc-apply').onclick = () => {
   const name = $('#acc-name').value.trim();
@@ -132,7 +148,17 @@ $('#acc-apply').onclick = () => {
   const appSlug = ($('#acc-slug').value.trim() || appName.toLowerCase());
   const ops = [...$('#acc-ops').querySelectorAll('input:checked')].map((c) => c.value);
   if (ops.length && !ops.includes('identity')) ops.unshift('identity');
-  draft.newAccounts[name] = { appId, installationId, appName, appSlug, role: $('#acc-role').value, ...(ops.length ? { operations: ops } : {}) };
+  const blockedRepos = [...$('#acc-repos').querySelectorAll('input')].filter((c) => !c.checked).map((c) => c.value);
+  if (blockedRepos.length >= Object.keys(draft.repositories).length) return say('至少要留一个可用仓库。', true);
+  for (const repo of Object.keys(draft.repositories)) {
+    const table = draft.repositoryRoles[repo];
+    if (blockedRepos.includes(repo)) draft.repositoryRoles[repo] = { ...(table || {}), [name]: 'none' };
+    else if (table && table[name] === 'none') {
+      delete table[name];
+      if (!Object.keys(table).length && !state.config?.repositoryRoles?.[repo]) delete draft.repositoryRoles[repo];
+    }
+  }
+  draft.newAccounts[name] = { appId, installationId, appName, appSlug, role: $('#acc-role').value, ...(ops.length ? { operations: ops } : {}), ...($('#acc-broad').checked ? { allowBroaderInstallation: true } : {}) };
   if (!draft.accounts.includes(name)) draft.accounts.push(name);
   say('已放入待保存：' + name + '。点「保存」后生效。'); render();
 };
