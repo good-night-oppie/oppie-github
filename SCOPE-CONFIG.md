@@ -77,9 +77,9 @@ The settings page edits the configuration below (the `config` text inside the si
 | `repositories` | `SIX` / `CATALOG` | name → numeric GitHub repository ID; names `^[A-Za-z0-9._-]{1,100}$`; IDs unique. Replaces the whole list. |
 | `optionalRepositories` | `OPTIONAL_REPOSITORIES` | names from `repositories` that may be absent from an installation; at least one repository must stay required. |
 | `accounts` | `ACCOUNT_NAMES` | accounts usable on this machine; each must be built-in or defined in `newAccounts`. Default: built-ins plus every `newAccounts` entry. |
-| `newAccounts` | — | additional teammate Apps. `appId`, `installationId`, `appName` are pinned exactly like the compiled accounts (App ID, installation ID, owner and slug `oppie-agent-<name>` or lower-case `appName` are verified on every call). `role`: `review` (default), `comment_review` or `write`. Never admin, never QQ. Built-in accounts cannot be redefined. |
+| `newAccounts` | — | additional teammate Apps. `appId`, `installationId`, `appName` are pinned exactly like the compiled accounts (App ID, installation ID, owner and slug `oppie-agent-<name>` or lower-case `appName` are verified on every call). `role`: `review` (default), `reviewer` (read, `comment_issue`, and `submit_review` with COMMENT, APPROVE or REQUEST_CHANGES), `comment_review` or `write`. Never admin, never QQ. Built-in accounts cannot be redefined. Execution tokens request `contents:write` only when the account can write contents somewhere (role `write`, or `write` in a `repositoryRoles` entry, and an operation list that includes a content write); otherwise `contents:read` (QQ, #28). `allowBroaderInstallation: true` accepts an App installation with more permissions than the role needs (it must still contain every level the role needs); the execution token is still compared exactly. |
 | `twoRepositories` | `TWO` | must be a subset of `repositories` (kept for compatibility; the review queue keeps its own fixed list). |
-| `repositoryRoles` | `CINDY_ROLES` / `CINDY_EXECUTION` | per repository: account → `write`, `review` (only `reviewOperations`) or `comment_review` (same, COMMENT reviews only). |
+| `repositoryRoles` | `CINDY_ROLES` / `CINDY_EXECUTION` | per repository: account → `write`, `reviewer`, `review` (only `reviewOperations`), `comment_review` (same, COMMENT reviews only) or `none` (the account cannot use this repository; it is left out of the account's execution token). Every enabled account must keep at least one usable repository. In the settings page this is the account form's "usable repositories" checkboxes. |
 | `reviewOperations` | `REVIEW_OPERATIONS` | subset of the compiled list and must contain `identity`; write, admin and QQ-only operations can never be added. |
 
 ## Not configurable
@@ -88,7 +88,7 @@ Owner organisation; App/installation IDs of the twelve built-in accounts; token 
 
 ## Adding a teammate App (example: AD)
 
-1. In the settings page, add account `ad` with App name `ADOppieXYZ`, App ID 5764947, Installation ID 182084517 and a role (`review` unless the owner grants `write`); save and confirm the card.
+1. In the settings page, add account `ad` with App name `ADOppieXYZ`, App ID 5764947, Installation ID 182084517 and a role. For the read/comment/review use BB described in #29, choose `reviewer`. ADOppieXYZ is installed with more permissions than that role needs (secrets, workflows, actions, hooks write), so tick "allow a broader installation"; otherwise identity fails with `PERMISSION_MISMATCH`. Whether AD may use `cindy` is the owner's choice in the "usable repositories" checkboxes; nothing is fixed in code. Save and confirm the card, which lists the role, the broader-installation choice and any unusable repositories.
 2. The owner pastes AD's private key into the settings page key field and confirms the import card. Import verifies the App and installation first.
 3. Run `github` `identity` for `ad` and check `app_id`, `installationRepositorySelection` and `repositories`.
 
