@@ -1,31 +1,38 @@
-# Scope configuration (`scope-config.json`)
+# Account configuration (`scope-config.json`) and remote authority
 
-Since 1.5.0-preview.10-settings.1 (2026-11-15). Owner request: every GitHub App now has access to all repositories of good-night-oppie, and the repository list, accounts and role tables must be changeable without a code change.
+Since 1.5.0-preview.10-settings.7. Owner decision 2026-11-16 (oppie-github#8): 「以后plugin代码里不要框死伙伴的权限。永远以远端为主。远端配置了什么，我们这边通过配置页面加上伙伴后，应该同步接受远端的配置」.
 
-## What changed
+## The remote decides
 
-- The App installation no longer has to equal the configured list. `repository_selection` may be `selected` or `all`; the installation listing is read completely (up to 10 pages / 1000 repositories) and repositories outside the list are ignored.
-- The target repository must still be in the configured list. Anything else fails with `REPOSITORY_NOT_ALLOWED`, `not_executed`, before any credential is read.
-- Execution tokens are still requested with `repository_ids` = the configured repositories present in the installation, and the token's repository set is still checked exactly (`EXECUTION_REPOSITORY_SCOPE_MISMATCH`). A token never covers the whole organisation.
-- Still fail closed (`INSTALLATION_REPOSITORY_SCOPE_MISMATCH`): incomplete or inconsistent listing, an entry not owned by good-night-oppie, duplicate IDs, a configured name present with a different ID, a required (non-optional) configured repository missing.
-- ReviewInbox keeps APPROVE/REQUEST_CHANGES as installed (seven-roles.1, 2026-11-14); per the owner decision of 2026-11-15 the COMMENT-only limit stays removed. QQ, admin and other account rules are unchanged.
+- What an account can do and which repositories it can use follow its GitHub App installation in good-night-oppie: the installation's permissions and its repositories (`all` or `selected`). The plugin has no roles, operation allowlists or ceilings, repository list, per-repository roles, QQ-only or admin-only account limits, and no "installation must equal X" checks.
+- The owner has given every App access to all repositories. Under this model every teammate whose installation has write permissions can write every repository in its installation (56 today). To narrow an account, change its App's installation (permissions or repository selection) on GitHub; the next call follows it.
+- Every call reads the App (`/app`) and its installation again. Built-in accounts use their pinned installation ID; accounts added in the settings page use the App's single installation whose account is good-night-oppie (none or more than one: `INSTALLATION_NOT_FOUND`). Nothing is cached between calls.
 
-## Settings page (1.5.0-preview.10-settings.1)
+## Safety baseline (kept in code)
 
-The plugin detail page in Cindy (sidebar → 插件 → 伙伴 GitHub) shows the current configuration and lets the owner:
+- Per-operation token: each call requests a new installation token for the target repository only (plus MontClip when a ruleset change cites an owner comment there) with exactly the operation's permissions, `metadata:read` plus the list in `OPERATION_NEEDS` (`node/core.cjs`). It never asks for more than the installation has.
+- Before the token: if the installation lacks a level the operation needs, the call fails with `INSTALLATION_PERMISSION_MISSING`; `details.missing`, `details.fix` and two links say what to add and where (App permissions page, installation page).
+- GitHub refuses a token for a repository outside the installation; the plugin reports `REPOSITORY_NOT_INSTALLED` with the repository name.
+- After the token: the granted permissions must equal the request (`TOKEN_PERMISSION_MISMATCH`) and the token's repository listing must equal the requested repositories (`EXECUTION_REPOSITORY_SCOPE_MISMATCH`).
+- Identity stays pinned: App ID, slug and owner organisation must match (`APP_IDENTITY_MISMATCH`); the installation must be the App's, in good-night-oppie, an organisation and not suspended (`INSTALLATION_MISMATCH`).
+- Private keys only through the settings-page key field into the DPAPI store, never in logs, results or audit lines. No writes to a repository's default branch (`DEFAULT_BRANCH_WRITE_REFUSED`); `commit_files` is fast-forward only, force is never allowed. `ruleset_update` still needs the owner's written authorization comment, a one-use nonce and a host confirmation each time, whichever account runs it. `automaticReviews` is read only when the worker starts. The configuration file is signed (see Integrity); forged or replayed files fail closed.
 
-- add, change, disable or delete teammate Apps (account name, App name, slug, App ID, Installation ID, role, allowed operations);
+## Settings page
+
+The plugin detail page in Cindy (sidebar → 插件 → 伙伴 GitHub) lets the owner:
+
+- add, change, disable or delete teammate Apps with identity only: account name, App name, slug (optional, default lower-case App name) and App ID;
 - enable or disable the twelve built-in accounts (their identities stay in code and cannot be edited);
-- add or remove repositories (name + numeric ID; new repositories start as optional);
 - import an App private key.
 
-Confirmation card contents (QQ review 2026-11-16): an added repository lists how many accounts can write it and which ones, which accounts are read/review only, that qq additionally gets its rulesets/dismissal/merge-queue/repository-settings operations there, and that accounts not listed in `repositoryRoles` keep their own account role on it (compiled accounts: ordinary write). A configured account shows its role in words (for example `可写名单内全部仓库`). Whether a newly added repository should default to write or to read/review is an open owner decision; until it is made, accounts without a `repositoryRoles` entry keep their account role, and the card says so.
+Saving: the page sends the whole proposal to main.js; Node validates it and returns a summary and SHA-256; main.js shows the host confirmation card with the revision change and the summary (over 300 characters is refused as `CONFIRMATION_TOO_LARGE`); only a confirmed click saves. Node re-validates, refuses a stale revision (`SCOPE_REVISION_CONFLICT`) or a changed payload (`PROPOSAL_CHANGED`), writes a signed `scope-config.json` atomically with the store's owner-only ACL and appends a redacted line to `scope-config-audit.jsonl`. The card for an added or changed App says that permissions and repositories follow its installation on GitHub and are shown when the key is imported.
 
-Saving: the page sends the whole proposal to main.js; Node validates it and returns a summary and SHA-256; main.js shows the host confirmation card with the revision change and the full summary (over 300 characters is refused as `CONFIRMATION_TOO_LARGE`, split into smaller saves); only a confirmed click saves. Node re-validates, refuses a stale revision (`SCOPE_REVISION_CONFLICT`) or a changed payload (`PROPOSAL_CHANGED`), writes a signed `scope-config.json` atomically with the store's owner-only ACL (see Integrity below) and appends a redacted line to `scope-config-audit.jsonl`. The next call uses the new configuration; no restart.
+Private keys: the page puts the PEM straight into the host vault (`PUT /secrets/app_private_key`). The host injects it only into the Node method `settings/import_key` (manifest `node.secretBindings`). Import has two steps with the same key:
 
-Private keys: the page puts the PEM straight into the host vault (`PUT /secrets/app_private_key`). The host injects it only into the Node method `settings/import_key` (manifest `node.secretBindings`). After a confirmation card, Node checks the key against GitHub with the configured App ID, slug, installation and permissions, then stores it with the existing DPAPI store; the vault copy is deleted afterwards by main.js (after every import attempt and at plugin start) and by the settings page whenever it opens, because the host does not delete a manual secret after injecting it (verified in Cindy 0.1.136 `ghostSecretsEndpoint.ts`). The key is never placed in `/kv`, BroadcastChannel messages, RPC parameters, results, audit lines or logs. Nobody should ask for or relay a private key.
+1. `inspect`: Node signs in as the App, finds its good-night-oppie installation and returns a summary of what GitHub reports (App slug and ID, installation ID, all or selected repositories with a count and the first five names, the installation's permissions) plus a hash of those facts. Nothing is stored.
+2. main.js shows that summary on the host confirmation card. Only after the owner confirms does it call `store` with the hash; Node checks again and stores the key only if GitHub still reports the same facts (otherwise `PROPOSAL_CHANGED`).
 
-Configured accounts may also list `operations` (a subset of the ordinary operations; `identity` required). Admin and QQ-only operations are never available to them, and they may not reuse a built-in App or installation ID.
+The vault copy is deleted afterwards by main.js (after every import attempt and at plugin start) and by the settings page whenever it opens, because the host does not delete a manual secret after injecting it (verified in Cindy 0.1.136 `ghostSecretsEndpoint.ts`). The key is never placed in `/kv`, BroadcastChannel messages, RPC parameters, results, audit lines or logs. Nobody should ask for or relay a private key.
 
 Requires Cindy 0.1.136 (verified against tag v0.1.136, commit 7227e8311a2d782f399323b21483c072fb1353b8).
 
@@ -33,7 +40,7 @@ Requires Cindy 0.1.136 (verified against tag v0.1.136, commit 7227e8311a2d782f39
 
 `<plugin private store>/scope-config.json` — the same directory as the encrypted key store (`github_accounts` reports the exact path as `scopeConfig.path`). On Windows this is under the user's profile with an owner-only ACL.
 
-- Missing file (never saved): compiled defaults (identical to 1.5.0-preview.8-seven-roles.2). Once the audit log `scope-config-audit.jsonl` records a save, a missing configuration together with a missing key is refused (`INVALID_SCOPE_CONFIGURATION`, reason `configuration and key deleted after a save`) instead of reverting to the defaults (QQ review of #33).
+- Missing file (never saved): compiled defaults (the twelve built-in accounts). Once the audit log `scope-config-audit.jsonl` records a save, a missing configuration together with a missing key is refused (`INVALID_SCOPE_CONFIGURATION`, reason `configuration and key deleted after a save`) instead of reverting to the defaults (QQ review of #33).
 - `identity` reports `scopeConfigSource` and `github_accounts` reports `scopeConfig.source`: `default` (compiled defaults), `file` (signed configuration) or `invalid`.
 - Both files are checked on every call (size, mtime, inode) and re-read through the store's owner-only ACL check and re-verified when they change, so a save applies to the next call without restarting the plugin.
 - `deployment.json` (accounts allowed on this host, `automaticReviews`) is also read on every call, not once at worker start (DD, europa, 2026-11-16: the earlier `require()` snapshot ignored edits until the plugin restarted). An unreadable or invalid `deployment.json` makes every account unavailable on this host (`ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST`) until it is fixed; no restart is needed. `automaticReviews` is an owner safety switch and is the exception: it is read once when the worker starts, so editing `deployment.json` cannot turn automatic reviews on in a running plugin (QQ review of #33); a change takes effect after the plugin restarts. `test/hot-reload-runtime.test.cjs` runs one worker and changes both files underneath it.
@@ -57,51 +64,32 @@ Residual risk: any process running as the same Windows user can also call DPAPI,
 
 ## Format
 
-The settings page edits the configuration below (the `config` text inside the signed envelope). All keys are optional; a missing key keeps its default. Unknown keys are rejected.
+The settings page edits the configuration below (the `config` text inside the signed envelope). All keys are optional; unknown keys, including the removed `repositories`, `optionalRepositories`, `twoRepositories`, `repositoryRoles`, `reviewOperations` and per-account `installationId`, `role` and `operations`, are rejected.
 
 ```json
 {
   "schemaVersion": 1,
-  "repositories": {"MontClip": 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929, "cindy": 1457433299},
-  "optionalRepositories": ["cindy"],
   "accounts": ["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox", "ad"],
-  "newAccounts": {"ad": {"appId": 5764947, "installationId": 182084517, "appName": "ADOppieXYZ", "role": "review"}},
-  "twoRepositories": {"MontClip": 1441621868, "MontClip-Cindy": 1446532339},
-  "repositoryRoles": {"cindy": {"bb": "write", "deja": "write", "dd": "write", "qq": "write"}},
-  "reviewOperations": ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]
+  "newAccounts": {"ad": {"appId": 5764947, "appName": "ADOppieXYZ"}}
 }
 ```
 
-| Key | Former constant | Rules |
-| --- | --- | --- |
-| `repositories` | `SIX` / `CATALOG` | name → numeric GitHub repository ID; names `^[A-Za-z0-9._-]{1,100}$`; IDs unique. Replaces the whole list. |
-| `optionalRepositories` | `OPTIONAL_REPOSITORIES` | names from `repositories` that may be absent from an installation; at least one repository must stay required. |
-| `accounts` | `ACCOUNT_NAMES` | accounts usable on this machine; each must be built-in or defined in `newAccounts`. Default: built-ins plus every `newAccounts` entry. |
-| `newAccounts` | — | additional teammate Apps. `appId`, `installationId`, `appName` are pinned exactly like the compiled accounts (App ID, installation ID, owner and slug `oppie-agent-<name>` or lower-case `appName` are verified on every call). `role`: `review` (default), `reviewer` (read, `comment_issue`, and `submit_review` with COMMENT, APPROVE or REQUEST_CHANGES), `comment_review` or `write`. Never admin, never QQ. Built-in accounts cannot be redefined. Permissions follow the App's actual installation (owner, 2026-11-16): see "Installation and token permissions" below. |
-| `twoRepositories` | `TWO` | must be a subset of `repositories` (kept for compatibility; the review queue keeps its own fixed list). |
-| `repositoryRoles` | `CINDY_ROLES` / `CINDY_EXECUTION` | per repository: account → `write`, `reviewer`, `review` (only `reviewOperations`), `comment_review` (same, COMMENT reviews only) or `none` (the account cannot use this repository; it is left out of the account's execution token). Every enabled account must keep at least one usable repository. In the settings page this is the account form's "usable repositories" checkboxes. |
-| `reviewOperations` | `REVIEW_OPERATIONS` | subset of the compiled list and must contain `identity`; write, admin and QQ-only operations can never be added. |
-
-## Installation and token permissions
-
-Owner decision 2026-11-16 (via QQ): permissions follow the App's actual GitHub installation instead of a fixed list in the plugin.
-
-- Installation: an installation may hold more than the account needs (PG: administration; AD: secrets, workflows, actions, hooks). That is accepted for every account and never forwarded. Only when it lacks a level the requested operation needs does the call fail, before any execution token, with `INSTALLATION_PERMISSION_MISSING`. `details.missing` lists each permission, the required level and the installed level; `details.fix` says to add it in the App's Permissions settings and accept the update on the organisation's installation page (both links included).
-- Execution token: requests the least the operation needs. `contents:write` only for content writes (`create_branch`, `update_file`, `edit_file`, `commit_files`) and QQ's `enqueue_pull`; every other operation requests `contents:read`. `issues:write`, `pull_requests:write`, `metadata:read` (and `administration:write` for the admin account) are unchanged. The minted token must equal the request (nothing extra, nothing stronger), otherwise `PERMISSION_MISMATCH`; QQ's rules are unchanged.
-- Roles still decide which operations an account may run; QQ-only operations are unchanged.
-- `identity` returns `permissions` (the most the account's role can need), `installationPermissions` (what GitHub reports) and `missingInstallationPermissions` (what the role would lack), so a missing level is visible before a write is attempted.
+| Key | Rules |
+| --- | --- |
+| `accounts` | accounts usable on this machine; each must be built-in or defined in `newAccounts`. Default: built-ins plus every `newAccounts` entry. |
+| `newAccounts` | additional teammate Apps: `appId` (pinned), `appName`, optional `appSlug`. The live App must have that ID, a slug of `appSlug` (or lower-case `appName`) or `oppie-agent-<name>`, and be owned by good-night-oppie. A built-in account name or a built-in App ID cannot be reused; two accounts cannot share an App ID. |
 
 ## Not configurable
 
-Owner organisation; App/installation IDs of the twelve built-in accounts; token permission sets (including QQ contents:read and PG narrowing); QQ-only and admin operations; default-branch refusal; fast-forward-only `commit_files`; owner-authorization checks for `ruleset_update`; the review queue repository list.
+Owner organisation; App and installation IDs of the twelve built-in accounts; per-operation token permissions; default-branch refusal; fast-forward-only `commit_files`; owner-authorization checks for `ruleset_update`; the review queue repository list (MontClip and MontClip-Cindy).
 
 ## Adding a teammate App (example: AD)
 
-1. In the settings page, add account `ad` with App name `ADOppieXYZ`, App ID 5764947, Installation ID 182084517 and a role. For the read/comment/review use BB described in #29, choose `reviewer`. ADOppieXYZ's installation holds more than that role needs (secrets, workflows, actions, hooks write); that is accepted automatically and never requested on a token. Whether AD may use `cindy` is the owner's choice in the "usable repositories" checkboxes; nothing is fixed in code. Save and confirm the card, which lists the role and any unusable repositories.
-2. The owner pastes AD's private key into the settings page key field and confirms the import card. Import verifies the App and installation first.
-3. Run `github` `identity` for `ad` and check `app_id`, `installationRepositorySelection` and `repositories`.
+1. In the settings page, add account `ad` with App name `ADOppieXYZ` and App ID 5764947. Save and confirm the card.
+2. The owner pastes AD's private key into the settings page key field and clicks import. The confirmation card shows what GitHub reports, for example: installation 182084517, all repositories (56), permissions contents:write, issues:write, pull_requests:write and more. Confirm to store the key.
+3. Run `github` `identity` for `ad` (optionally with a `repo`) and check `installation_id`, `installationRepositorySelection`, `installationPermissions` and `availableOperations`.
 
-The key is encrypted with the App ID and installation ID as DPAPI entropy; changing those IDs in the file later makes the stored key unreadable (`KEY_UNAVAILABLE`) until it is imported again.
+The key is encrypted with DPAPI entropy derived from the account and App ID (`installationId` is recorded as `auto` for settings-page accounts), so a later installation change does not make the stored key unreadable.
 
 ## Trust boundary
 

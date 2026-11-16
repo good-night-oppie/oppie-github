@@ -9,7 +9,8 @@
 
   <section>
     <h3>伙伴账号</h3>
-    <table id="accounts"><thead><tr><th>账号</th><th>App</th><th>角色</th><th>私钥</th><th></th></tr></thead><tbody></tbody></table>
+    <p class="muted">每个伙伴能做什么、能用哪些仓库，都以 GitHub 上这个 App 的安装为准（权限和仓库）。要收窄就到 GitHub 上改 App 安装，插件下一次调用就跟着变。</p>
+    <table id="accounts"><thead><tr><th>账号</th><th>App</th><th>私钥</th><th></th></tr></thead><tbody></tbody></table>
     <details id="account-form-box">
       <summary>添加或修改伙伴账号</summary>
       <div class="grid">
@@ -17,29 +18,10 @@
         <label>App 名称<input id="acc-app-name" placeholder="ADOppieXYZ" autocomplete="off"></label>
         <label>App slug<input id="acc-slug" placeholder="默认为 App 名称小写" autocomplete="off"></label>
         <label>App ID<input id="acc-app-id" inputmode="numeric" autocomplete="off"></label>
-        <label>Installation ID<input id="acc-install-id" inputmode="numeric" autocomplete="off"></label>
-        <label>角色<select id="acc-role">
-          <option value="review">只读+评审</option>
-          <option value="reviewer">只读+评论+评审（可批准或要求修改）</option>
-          <option value="comment_review">只读+仅 COMMENT 评审</option>
-          <option value="write">普通读写（不含管理员）</option>
-        </select></label>
       </div>
-      <fieldset><legend>可用仓库（取消勾选 = 这个账号不能用该仓库）</legend><div id="acc-repos" class="ops"></div></fieldset>
-      <fieldset><legend>可用操作（不勾选 = 按角色全部可用）</legend><div id="acc-ops" class="ops"></div></fieldset>
       <button id="acc-apply" type="button">放入待保存</button>
-      <p class="muted">内置的 12 个账号身份写在代码里，只能在这里停用或启用，不能修改。</p>
+      <p class="muted">只填 App 身份。安装 ID、权限和仓库在导入私钥时从 GitHub 读取，显示在确认框上。内置的 12 个账号身份写在代码里，只能停用或启用。</p>
     </details>
-  </section>
-
-  <section>
-    <h3>仓库名单（good-night-oppie）</h3>
-    <table id="repos"><thead><tr><th>仓库</th><th>ID</th><th>可选</th><th></th></tr></thead><tbody></tbody></table>
-    <div class="grid">
-      <label>仓库名<input id="repo-name" placeholder="MontClip" autocomplete="off"></label>
-      <label>仓库 ID<input id="repo-id" inputmode="numeric" autocomplete="off"></label>
-    </div>
-    <button id="repo-add" type="button">放入待保存</button>
   </section>
 
   <section>
@@ -56,7 +38,8 @@
       <label class="check"><input id="key-replace" type="checkbox">替换已保存的私钥</label>
     </div>
     <label>私钥（PEM）<textarea id="key-pem" rows="4" spellcheck="false" autocomplete="off" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></label>
-    <button id="key-import" type="button">导入（需要确认）</button>
+    <button id="key-import" type="button">核对并导入（需要确认）</button>
+    <p class="muted">导入前会先用这把私钥向 GitHub 读出 App 的安装、权限和仓库，显示在确认框上；确认后才保存。</p>
   </section>
 
   <p class="muted" id="message" role="status"></p>

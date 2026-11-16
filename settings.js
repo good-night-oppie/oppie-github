@@ -34,8 +34,8 @@ const ERRORS = {
   INVALID_PRIVATE_KEY: '私钥格式不对。',
   ACCOUNT_NOT_CONFIGURED: '这个账号还没保存到配置里，请先保存账号。',
   APP_IDENTITY_MISMATCH: 'GitHub 返回的 App 与配置的 App ID 或 slug 不一致，私钥没有保存。',
-  INSTALLATION_MISMATCH: '安装 ID 与这个 App 不匹配，私钥没有保存。',
-  PERMISSION_MISMATCH: 'App 权限与要求不一致，私钥没有保存。',
+  INSTALLATION_MISMATCH: 'App 的安装信息不对（不在 good-night-oppie 或被暂停），私钥没有保存。',
+  INSTALLATION_NOT_FOUND: '这个 App 还没有安装到 good-night-oppie 组织，私钥没有保存。',
   ACCOUNT_EXISTS: '这个账号已经有私钥；如需替换请勾选「替换已保存的私钥」。',
   BUSY: '另一个确认正在进行，请稍后再试。',
   NO_RESPONSE: '插件后台没有响应。',
@@ -43,9 +43,6 @@ const ERRORS = {
 function say(text, isError) { const el = $('#message'); el.textContent = text || ''; el.className = isError ? 'error' : 'muted'; }
 function explain(result) {
   if (result?.ok) return '';
-  // The worker adds a plain reason and the next step (node/messages.cjs); older answers fall back here.
-  const next = result?.next?.who && result?.next?.action ? ' 下一步（' + result.next.who + '）：' + result.next.action : '';
-  if (typeof result?.message === 'string' && result.message && result?.next) return result.message + next + '（' + result.errorCode + '）';
   const reason = result?.details?.reason ? '（' + result.details.reason + '）' : '';
   return (ERRORS[result?.errorCode] || ('未完成：' + (result?.errorCode || '未知错误'))) + reason;
 }
@@ -62,7 +59,6 @@ function render() {
     : '配置修订号 r' + state.revision + (state.source === 'default' ? '（使用内置默认值）' : '') + '。保存后下一次调用立即生效，不用重启。';
   $('#status').className = state.source === 'invalid' ? 'error' : 'muted';
   if (!draft) return;
-  const roleText = { write: '读写', reviewer: '只读+评论+评审', review: '只读+评审', comment_review: '仅 COMMENT 评审' };
   const names = [...new Set([...state.builtinAccounts, ...Object.keys(draft.newAccounts)])];
   const tbody = $('#accounts tbody'); tbody.replaceChildren();
   for (const name of names) {
@@ -70,10 +66,7 @@ function render() {
     const enabled = draft.accounts.includes(name);
     const a = draft.newAccounts[name];
     tr.append(td(name + (enabled ? '' : '（停用）')));
-    tr.append(td(a ? a.appName + ' · ' + a.appSlug + ' · App ' + a.appId + ' · 安装 ' + a.installationId : '内置'));
-    const blocked = Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none');
-    tr.append(td((a ? roleText[a.role] + (a.operations ? '，' + a.operations.length + ' 项操作' : '') : '按代码')
-      + (blocked.length ? '，不可用：' + blocked.join('、') : '')));
+    tr.append(td(a ? a.appName + ' · ' + a.appSlug + ' · App ' + a.appId : '内置'));
     tr.append(td(state.keys.includes(name) ? '已保存' : '未导入'));
     const actions = document.createElement('td');
     actions.append(button(enabled ? '停用' : '启用', () => {
@@ -84,99 +77,40 @@ function render() {
       actions.append(button('删除', () => {
         delete draft.newAccounts[name];
         draft.accounts = draft.accounts.filter((x) => x !== name);
-        for (const table of Object.values(draft.repositoryRoles)) delete table[name];
         render();
       }));
     }
     tr.append(actions); tbody.append(tr);
   }
-  const rbody = $('#repos tbody'); rbody.replaceChildren();
-  for (const [name, id] of Object.entries(draft.repositories)) {
-    const tr = document.createElement('tr');
-    tr.append(td(name), td(String(id)));
-    const opt = document.createElement('td'); const box = document.createElement('input'); box.type = 'checkbox';
-    box.checked = draft.optionalRepositories.includes(name);
-    box.onchange = () => { draft.optionalRepositories = box.checked ? [...draft.optionalRepositories, name] : draft.optionalRepositories.filter((x) => x !== name); render(); };
-    opt.append(box); tr.append(opt);
-    const actions = document.createElement('td');
-    actions.append(button('删除', () => {
-      delete draft.repositories[name];
-      draft.optionalRepositories = draft.optionalRepositories.filter((x) => x !== name);
-      delete draft.twoRepositories[name]; delete draft.repositoryRoles[name];
-      render();
-    }));
-    tr.append(actions); rbody.append(tr);
-  }
-  renderAccountRepos();
   const select = $('#key-account'); const keep = select.value; select.replaceChildren();
   for (const name of state.config.accounts) { const o = document.createElement('option'); o.value = name; o.textContent = name; select.append(o); }
   if (state.config.accounts.includes(keep)) select.value = keep;
   $('#pending').textContent = changed() ? '有未保存的修改。保存时会弹出确认框，列出全部改动。' : '';
   $('#save').disabled = !changed();
 }
-function renderOps() {
-  const box = $('#acc-ops'); box.replaceChildren();
-  for (const op of state.accountOperationCeiling) {
-    const l = document.createElement('label'); const c = document.createElement('input');
-    c.type = 'checkbox'; c.value = op; l.append(c, document.createTextNode(op)); box.append(l);
-  }
-}
-// Usable repositories for the account in the form. Unchecked = repository role 'none' for that
-// account (e.g. whether AD may use cindy is the owner's choice here, not in code).
-function renderAccountRepos(uncheckedFor) {
-  const box = $('#acc-repos'); if (!box || !draft) return;
-  const unchecked = uncheckedFor ?? new Set([...box.querySelectorAll('input')].filter((c) => !c.checked).map((c) => c.value));
-  box.replaceChildren();
-  for (const repo of Object.keys(draft.repositories)) {
-    const l = document.createElement('label'); const c = document.createElement('input');
-    c.type = 'checkbox'; c.value = repo; c.checked = !unchecked.has(repo); l.append(c, document.createTextNode(repo)); box.append(l);
-  }
-}
 function fillAccount(name) {
   const a = draft.newAccounts[name]; $('#account-form-box').open = true;
   $('#acc-name').value = name; $('#acc-app-name').value = a.appName; $('#acc-slug').value = a.appSlug;
-  $('#acc-app-id').value = a.appId; $('#acc-install-id').value = a.installationId; $('#acc-role').value = a.role;
-  for (const c of $('#acc-ops').querySelectorAll('input')) c.checked = !!a.operations?.includes(c.value);
-  renderAccountRepos(new Set(Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none')));
+  $('#acc-app-id').value = a.appId;
 }
 $('#acc-apply').onclick = () => {
   const name = $('#acc-name').value.trim();
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) return say('账号名只能用小写字母、数字和短横线，并以字母开头。', true);
   if (isBuiltin(name)) return say('内置账号不能修改，只能停用或启用。', true);
-  const appId = Number($('#acc-app-id').value.trim()), installationId = Number($('#acc-install-id').value.trim());
-  if (!Number.isSafeInteger(appId) || appId < 1 || !Number.isSafeInteger(installationId) || installationId < 1) return say('App ID 和 Installation ID 必须是正整数。', true);
+  const appId = Number($('#acc-app-id').value.trim());
+  if (!Number.isSafeInteger(appId) || appId < 1) return say('App ID 必须是正整数。', true);
   const appName = $('#acc-app-name').value.trim();
   if (!/^[A-Za-z0-9-]{1,34}$/.test(appName)) return say('App 名称只能包含字母、数字和短横线。', true);
   const appSlug = ($('#acc-slug').value.trim() || appName.toLowerCase());
-  const ops = [...$('#acc-ops').querySelectorAll('input:checked')].map((c) => c.value);
-  if (ops.length && !ops.includes('identity')) ops.unshift('identity');
-  const blockedRepos = [...$('#acc-repos').querySelectorAll('input')].filter((c) => !c.checked).map((c) => c.value);
-  if (blockedRepos.length >= Object.keys(draft.repositories).length) return say('至少要留一个可用仓库。', true);
-  for (const repo of Object.keys(draft.repositories)) {
-    const table = draft.repositoryRoles[repo];
-    if (blockedRepos.includes(repo)) draft.repositoryRoles[repo] = { ...(table || {}), [name]: 'none' };
-    else if (table && table[name] === 'none') {
-      delete table[name];
-      if (!Object.keys(table).length && !state.config?.repositoryRoles?.[repo]) delete draft.repositoryRoles[repo];
-    }
-  }
-  draft.newAccounts[name] = { appId, installationId, appName, appSlug, role: $('#acc-role').value, ...(ops.length ? { operations: ops } : {}) };
+  draft.newAccounts[name] = { appId, appName, appSlug };
   if (!draft.accounts.includes(name)) draft.accounts.push(name);
   say('已放入待保存：' + name + '。点「保存」后生效。'); render();
-};
-$('#repo-add').onclick = () => {
-  const name = $('#repo-name').value.trim(), id = Number($('#repo-id').value.trim());
-  if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === '.' || name === '..') return say('仓库名不合法（不带 owner）。', true);
-  if (!Number.isSafeInteger(id) || id < 1) return say('仓库 ID 必须是正整数（GitHub 仓库的数字 ID）。', true);
-  draft.repositories[name] = id; say('已放入待保存：' + name + '。新仓库默认是可选的，未安装时只影响它自己。');
-  if (!draft.optionalRepositories.includes(name)) draft.optionalRepositories.push(name);
-  render();
 };
 async function load(message) {
   const result = await ask({ type: 'settings-read' });
   if (!result?.ok) { $('#status').textContent = explain(result); $('#status').className = 'error'; return; }
   state = result; draft = state.config ? clone(state.config) : null;
-  renderOps(); render(); say(message || '');
+  render(); say(message || '');
 }
 $('#reload').onclick = () => load('已重新读取。');
 $('#save').onclick = async () => {
@@ -204,8 +138,7 @@ $('#key-import').onclick = async () => {
     $('#key-import').disabled = false;
   }
   if (result?.ok) {
-    say('已导入 ' + account + ' 的私钥，GitHub 核对通过（' + result.app_slug + '，' + (result.installationRepositorySelection === 'all' ? '全部仓库' : '指定仓库') + '）。');
-    await load('已导入 ' + account + ' 的私钥并通过 GitHub 核对。');
+    await load('已导入 ' + account + ' 的私钥。GitHub 上的情况：' + result.summary);
   } else say(explain(result), true);
 };
 // A key copy left by a closed or crashed page is removed as soon as the settings page opens.

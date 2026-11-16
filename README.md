@@ -1,6 +1,10 @@
 # 伙伴 GitHub plugin
 
-## All-repository installations and scope configuration (2026-11-15)
+## The remote decides (owner decision 2026-11-16, 1.5.0-preview.10-settings.7)
+
+What each teammate's App can do and which repositories it can use follow its GitHub App installation, not lists in this plugin. Roles, operation allowlists, the repository list, per-repository roles, QQ-only/admin-only limits and exact installation checks are removed. The settings page takes only the App identity and the private key; the key-import card shows the installation, permissions and repositories GitHub reports, and every call looks them up again. The owner has given every App all-repository access, so every teammate can write the repositories in its installation (56 today); to narrow an account, change its App installation on GitHub. Kept: a token per call for the target repository only with exactly the operation's permissions, keys only in the DPAPI store, no default-branch writes, no force push, owner authorization for rulesets, automaticReviews read at start, signed configuration. See [SCOPE-CONFIG.md](SCOPE-CONFIG.md). The sections below are history.
+
+## All-repository installations and scope configuration (2026-11-15, superseded)
 
 The Apps may now have access to all repositories of good-night-oppie. The installation no longer has to equal the configured list; the target repository must be in the list (REPOSITORY_NOT_ALLOWED otherwise, before credentials) and execution tokens stay narrowed to the list. Repositories, optional repositories, accounts (including new teammate Apps such as AD), per-repository roles and review operations are configurable in `scope-config.json`, re-read on every call. ReviewInbox keeps APPROVE/REQUEST_CHANGES as installed (seven-roles.1, 2026-11-14); per the owner decision of 2026-11-15 the COMMENT-only limit stays removed. See [SCOPE-CONFIG.md](SCOPE-CONFIG.md).
 

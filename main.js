@@ -2,19 +2,7 @@
 const MAX_OPERATION_BYTES=261120; // Operation budget stays below the host params limit; worker bounds the envelope separately.
 const READ_ONLY_OPERATIONS=new Set(['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','admin_get','list_rulesets','get_ruleset']);
 const HOST_PRE_DISPATCH_CODES=new Set(['INVALID_REQUEST','PROCESS_START_FAILED','RATE_LIMITED']);
-// Plain reason and next step for the codes main.js creates itself (worker results carry their own).
-const HOST_ERRORS={
- UNKNOWN_TOOL:['插件没有这个工具。','发起这次调用的伙伴','换成插件列出的工具名。'],
- OWNER_AUTHORIZATION_REQUIRED:['改规则集需要主人的授权引用。','QQ','先请主人在 Issue 上写授权，再带上 owner_authorization 链接。'],
- CONFIRMATION_TOO_LARGE:['确认卡要显示的内容太长。','发起这次调用的伙伴','把这次改动拆小一些再提交。'],
- OWNER_CONFIRMATION_REQUIRED:['需要主人在确认卡上点确认，这次没有确认。','主人','需要做这件事就重新发起，并在确认卡上点确认。'],
- REQUEST_TOO_LARGE:['请求太大，超过插件上限，没有发出。','发起这次调用的伙伴','把改动拆成多次提交，或改用 edit_file 只传改动部分。'],
- WORKER_UNAVAILABLE:['插件后台没有响应或已退出。','主人','在 Cindy 里重启插件后重试；写操作先读回确认结果。'],
- INVALID_REQUEST:['请求格式不对，没有发出。','发起这次调用的伙伴','按工具说明改正后重试。'],
- PROCESS_START_FAILED:['插件后台没能启动。','主人','在 Cindy 里重启插件；仍失败就报维护者。'],
- RATE_LIMITED:['调用太频繁，被限流。','发起这次调用的伙伴','等一会儿再试。'],
-};
-const safeFailure=(code,execution)=>{const e=HOST_ERRORS[code];return e?{ok:false,errorCode:code,execution,message:e[0]+(execution==='unknown'?'写入结果未知：先读回确认再决定是否重试。':''),next:{who:e[1],action:e[2]}}:{ok:false,errorCode:code,execution,message:'GitHub 操作未完成；请查看错误码。写入结果未知时，先读回确认再决定是否重试。'};};
+const safeFailure=(code,execution)=>({ok:false,errorCode:code,execution,message:'GitHub 操作未完成；请查看错误码。写入结果未知时，先读回确认再决定是否重试。'});
 cindy.onHostMessage(async function(message) {
   if (message.type !== 'tool-call') return;
   const methods = {github_accounts:'accounts',github_import_key:'import',github:'run',github_operations:'operations',github_review_queue:'review',github_author_cue_plan:'author_cue',inbox_service:'inbox_service'};
@@ -23,10 +11,11 @@ cindy.onHostMessage(async function(message) {
     if (!Object.prototype.hasOwnProperty.call(methods,message.tool)) throw Error('UNKNOWN_TOOL');
     let method=methods[message.tool],params=message.args||{};
     readOnly=['accounts','operations','author_cue'].includes(method)||(method==='run'&&READ_ONLY_OPERATIONS.has(params.operation))||(method==='inbox_service'&&params.action==='status');
-    if(message.tool==='github'&&params.account==='qq'&&params.operation==='ruleset_update'){
+    // Ruleset changes need the owner's written authorization and this confirmation, whichever account runs them.
+    if(message.tool==='github'&&params.operation==='ruleset_update'){
       const a=params.args||{};
       if(typeof a.owner_authorization!=='string'||!a.owner_authorization)throw Error('OWNER_AUTHORIZATION_REQUIRED');
-      const body='本次授权 QQ 修改 '+params.repo+' ruleset '+a.ruleset_id+' nonce:'+a.nonce+'：'+JSON.stringify(a.ruleset)+'\n引用：'+a.owner_authorization;
+      const body='本次授权 '+params.account+' 修改 '+params.repo+' ruleset '+a.ruleset_id+' nonce:'+a.nonce+'：'+JSON.stringify(a.ruleset)+'\n引用：'+a.owner_authorization;
       if(body.length>300)throw Error('CONFIRMATION_TOO_LARGE');
       const approval=await cindy.confirm({body,confirmText:'仅批准本次',cancelText:'取消',danger:true});
       if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
@@ -90,12 +79,18 @@ cindy.onHostMessage(async function(message) {
       }
       if (m.type === 'settings-import-key') {
         if (typeof m.account !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(m.account)) { answer(m.id, fail('INVALID_IMPORT')); return; }
-        const body = '为账号 ' + m.account + ' 导入 GitHub App 私钥：先向 GitHub 核对配置里的 App ID、安装 ID 和权限，通过后用本机 DPAPI 加密保存' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
-        const approval = await cindy.confirm({ body, confirmText: '导入', cancelText: '取消', danger: true });
-        if (!approval.ok) { answer(m.id, fail('OWNER_CONFIRMATION_UNAVAILABLE')); return; }
-        if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
-        try { answer(m.id, await node('settings/import_key', { account: m.account, replace: m.replace === true })); }
-        finally { await clearKeyCopy(); }
+        // Owner 2026-11-16: read the installation, permissions and repositories from GitHub first and
+        // show them on the card; store the key only if the owner confirms exactly those facts.
+        try {
+          const seen = await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'inspect' });
+          if (!seen.ok) { answer(m.id, seen); return; }
+          const body = '为 ' + seen.summary + '。确认后用本机 DPAPI 加密保存私钥' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
+          if (body.length > 900) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
+          const approval = await cindy.confirm({ body, confirmText: '导入', cancelText: '取消', danger: true });
+          if (!approval.ok) { answer(m.id, fail('OWNER_CONFIRMATION_UNAVAILABLE')); return; }
+          if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
+          answer(m.id, await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'store', hash: seen.hash }));
+        } finally { await clearKeyCopy(); }
       }
     } catch (_) {
       answer(m.id, { ok: false, errorCode: 'WORKER_UNAVAILABLE', execution: 'unknown' });
