@@ -112,6 +112,19 @@ test('import key: inspect reads the remote, store needs the same facts, DPAPI st
  const again=await settings.importKey({account:'ad',phase:'inspect'},{secrets:{app_private_key:pem}});
  await assert.rejects(settings.importKey({account:'ad',phase:'store',hash:again.hash},{secrets:{app_private_key:pem}}),{code:'ACCOUNT_EXISTS'});
 });
+// ADR 0003 Amendment 1 (PG; Deja agreed): a renamed App (slug differs) still imports; the stored row keeps
+// the configured slug, never the live one, so the key store does not start trusting the new name.
+test('import key: an App whose slug changed on GitHub still imports, with the configured slug stored',async t=>{
+ const {settings,store,remote}=await fixture(t);
+ const config=plus(await baseConfig(settings),'ad',AD);
+ const plan=await settings.propose({config,expectedRevision:0});await settings.save({config,expectedRevision:0,hash:plan.hash});
+ remote.app_slug='ad-renamed';remote.warnings=[{check:'app_slug',expected:'adoppiexyz or oppie-agent-ad',actual:'ad-renamed'}];
+ const seen=await settings.importKey({account:'ad',phase:'inspect'},{secrets:{app_private_key:pem}});
+ const r=await settings.importKey({account:'ad',phase:'store',hash:seen.hash},{secrets:{app_private_key:pem}});
+ assert.equal(r.ok,true,r.errorCode);
+ const row=(await store.list()).find(x=>x.account==='ad');assert.equal(row.appSlug,'adoppiexyz');
+ assert.equal((await store.load('ad')).privateKey,pem);
+});
 test('import key: failed GitHub verification stores nothing and passes the reason through',async t=>{
  const {settings,store}=await fixture(t,{verify:()=>({ok:false,errorCode:'INSTALLATION_NOT_FOUND',details:{owner:'good-night-oppie',found:0}})});
  for(const phase of ['inspect','store']){
