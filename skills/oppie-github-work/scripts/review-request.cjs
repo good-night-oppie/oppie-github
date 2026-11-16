@@ -542,6 +542,15 @@ var require_core = __commonJS({
     function bad(code = "INVALID_ARGUMENTS") {
       throw new CoreError(code);
     }
+    var printable = (s) => [...s].map((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 ? " " : c).join("");
+    function configFailure(e) {
+      const reason = typeof e?.reason === "string" ? printable(e.reason).slice(0, 200) : void 0;
+      throw new CoreError("INVALID_SCOPE_CONFIGURATION", "not_executed", void 0, reason ? { reason } : void 0);
+    }
+    function checksFailed(code, checks) {
+      const failed = checks.filter((c) => !c.ok).map(({ ok, ...c }) => c);
+      if (failed.length) throw new CoreError(code, "not_executed", void 0, { failed });
+    }
     function configDigest(c) {
       return crypto.createHash("sha256").update(JSON.stringify(c)).digest("hex").slice(0, 16);
     }
@@ -691,8 +700,8 @@ var require_core = __commonJS({
           let config;
           try {
             config = await scopeConfig();
-          } catch (_) {
-            bad("INVALID_SCOPE_CONFIGURATION");
+          } catch (e) {
+            configFailure(e);
           }
           const account = configuredAccount(input2.account, config);
           if (!account) bad("ACCOUNT_REQUIRED");
@@ -704,8 +713,8 @@ var require_core = __commonJS({
           let policy;
           try {
             policy = validatePolicy(repositoryPolicy(config), config);
-          } catch (_) {
-            bad("INVALID_SCOPE_CONFIGURATION");
+          } catch (e) {
+            configFailure(e);
           }
           const scope = policy.accounts[account.account];
           const expectedRepos = scope.execution;
@@ -947,9 +956,21 @@ var require_core = __commonJS({
           secrets.push(jwt);
           pem = null;
           const app = await api("/app", jwt);
-          if (Number(app?.id) !== account.app_id || typeof app?.slug !== "string" || !account.allowed_slugs.includes(app.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
+          const shown = (v) => typeof v === "string" || Number.isSafeInteger(v) ? String(v).slice(0, 100) : v === void 0 || v === null ? "missing" : "invalid";
+          checksFailed("APP_IDENTITY_MISMATCH", [
+            { check: "app_id", expected: String(account.app_id), actual: shown(app?.id), ok: Number(app?.id) === account.app_id },
+            { check: "app_slug", expected: account.allowed_slugs.join(" or "), actual: shown(app?.slug), ok: typeof app?.slug === "string" && account.allowed_slugs.includes(app.slug) },
+            { check: "app_owner", expected: OWNER, actual: shown(app?.owner?.login), ok: app?.owner?.login === OWNER }
+          ]);
           const installation = await api("/app/installations/" + account.installation_id, jwt);
-          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
+          checksFailed("INSTALLATION_MISMATCH", [
+            { check: "installation_id", expected: String(account.installation_id), actual: shown(installation?.id), ok: Number(installation?.id) === account.installation_id },
+            { check: "installation_app_id", expected: String(account.app_id), actual: shown(installation?.app_id), ok: Number(installation?.app_id) === account.app_id },
+            { check: "installation_owner", expected: OWNER, actual: shown(installation?.account?.login), ok: installation?.account?.login === OWNER },
+            { check: "installation_owner_type", expected: "Organization", actual: shown(installation?.account?.type), ok: installation?.account?.type === "Organization" },
+            { check: "repository_selection", expected: "selected or all", actual: shown(installation?.repository_selection), ok: ["selected", "all"].includes(installation?.repository_selection) },
+            { check: "suspended", expected: "not suspended", actual: installation?.suspended_at ? "suspended" : "not suspended", ok: !installation?.suspended_at }
+          ]);
           checkInstallation(installation.permissions, account, operation);
           const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
