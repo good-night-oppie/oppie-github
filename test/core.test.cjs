@@ -31,21 +31,26 @@ function fixture(options={}){
   else if(account.installation_id&&path==='/app/installations/'+account.installation_id)data=installation();
   else if(path.endsWith('/access_tokens')){
    const request=JSON.parse(init.body);
+   if(request.repository_ids)request.repositories=request.repository_ids.map(id=>INSTALLED[id-1000]??'unknown-'+id);
    if(request.repositories&&request.repositories.some(n=>!remote.installed.includes(n)))return {ok:false,status:422,text:async()=>JSON.stringify({message:'There is at least one repository that does not exist or is not accessible to the parent installation.'})};
    if(Object.entries(request.permissions||{}).some(([k,v])=>!remote.permissions[k]||(remote.permissions[k]==='read'&&v==='write')))return {ok:false,status:422,text:async()=>'{}'};
    data={token:'secret-token-'+(++counter),expires_at:new Date(options.expired?NOW-1:NOW+3600000).toISOString(),permissions:request.permissions};
-   tokenRepositories.set('Bearer '+data.token,{probe:!request.repositories,list:installed(request.repositories||remote.installed)});
+   tokenRepositories.set('Bearer '+data.token,{probe:!request.repository_ids,list:installed(request.repositories||remote.installed)});
   }
   else if(path==='/installation/repositories'){const t=tokenRepositories.get(init.headers.Authorization);data=options.repositories&&t&&!t.probe?options.repositories:t?.list;}
   else if(path.endsWith('/pulls/7'))data={number:7,head:{sha:options.head||SHA},state:'open',draft:!!options.draft};
-  else if(/^\/repos\/good-night-oppie\/[^/]+$/.test(path))data={default_branch:'main'};
+  else if(/^\/repos\/good-night-oppie\/[^/]+$/.test(path)){const name=path.split('/').pop();if(!INSTALLED.includes(name))return {ok:false,status:404,text:async()=>'{}'};data={id:1000+INSTALLED.indexOf(name),name,full_name:'good-night-oppie/'+name,owner:{login:'good-night-oppie'},default_branch:'main'};}
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
   return {ok:status===200,status,text:async()=>JSON.stringify(data)};
  };
  return {calls,remote,client:createClient({scopeConfig:config?()=>config:undefined,credentials:async alias=>{credentialsCalls++;assert.equal(alias,account.account);return PEM;},fetch,now:()=>NOW,authorize:options.authorize,claimAuthorization:options.claimAuthorization|| (async()=>true)}),credentialsCalls:()=>credentialsCalls};
 }
 const input=(operation,args={},account='bb',repo='MontClip')=>({account,repo,operation,args});
-const executionTokens=calls=>calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repositories).map(c=>c.parsed);
+// Execution tokens are requested by repository ID (ADR 0003 section 2 step 6); shown here by name.
+const executionTokens=calls=>calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repository_ids).map(c=>({repositories:c.parsed.repository_ids.map(id=>INSTALLED[id-1000]),permissions:c.parsed.permissions}));
+// Calls that act on a repository beyond reading its own metadata (used to resolve its ID).
+const businessCalls=calls=>calls.filter(c=>/^[/]repos[/]good-night-oppie[/][^/]+[/]./.test(c.path));
+const resolveTokens=calls=>calls.filter(c=>c.path.endsWith('/access_tokens')&&c.parsed.repositories).map(c=>c.parsed);
 
 for(const variant of ['extra','missing','wrong-name','duplicate','count']){
  test(`execution scope diagnostic: ${variant} remains blocked before business execution`,async()=>{
@@ -61,8 +66,8 @@ for(const variant of ['extra','missing','wrong-name','duplicate','count']){
   assert.equal(r.execution,'not_executed');
   assert.deepEqual(r.diagnostics.expectedRepositories,['good-night-oppie/MontClip']);
   assert.deepEqual(r.diagnostics.actualRepositories,actual.repositories.map(x=>x.full_name));
-  assert.equal(f.calls.filter(c=>c.path.endsWith('/access_tokens')).length,1);
-  assert.equal(f.calls.some(c=>c.path.startsWith('/repos/')),false);
+  assert.equal(executionTokens(f.calls).length,1);
+  assert.equal(businessCalls(f.calls).length,0);
   assert.ok(!JSON.stringify(r).includes('secret-token'));
   assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
  });
@@ -91,8 +96,9 @@ test('identity: token for the target repository with metadata only, whole instal
  assert.equal(r.result.installationRepositories.complete,true);assert.equal(r.result.installationRepositories.repositories.length,56);
  assert.ok(!JSON.stringify(r).includes('secret-token'));assert.ok(!JSON.stringify(r).includes('PRIVATE KEY'));
  const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens'));
- assert.deepEqual(grants[0].parsed,{repositories:['MontClip'],permissions:{metadata:'read'}});
- assert.deepEqual(grants[1].parsed,{permissions:{metadata:'read'}},'listing probe: metadata only');
+ assert.deepEqual(grants[0].parsed,{repositories:['MontClip'],permissions:{metadata:'read'}},'resolve the name: metadata only');
+ assert.deepEqual(grants[1].parsed,{repository_ids:[1000],permissions:{metadata:'read'}},'execution token by repository ID');
+ assert.deepEqual(grants[2].parsed,{permissions:{metadata:'read'}},'listing probe: metadata only');
 });
 test('account mandatory and unknown account, repository escapes, operation rejected before key read',async()=>{
  const f=fixture();for(const value of [ {...input('identity'),account:undefined},{...input('identity'),account:'EdwardTang'},{...input('identity'),account:'ad'},{...input('identity'),repo:'other/MontClip'},{...input('identity'),repo:'../x'},{...input('get_pull',{number:1}),repo:undefined},{...input('identity'),operation:'raw_request'},input('get_contents',{path:'../secret'}),input('get_contents',{path:'a%2fb'}),input('create_branch',{branch:'bad..ref',sha:SHA}),input('identity',{url:'https://evil.test'})]){
@@ -182,7 +188,7 @@ test('execution token: extra or stronger permissions and extra repositories fail
  for(const granted of [{metadata:'read',issues:'read',contents:'read'},{metadata:'read',issues:'write'},{metadata:'read'}]){
   const f=fixture({override(path,init){if(path.endsWith('/access_tokens'))return {status:201,data:{token:'secret-token-x',expires_at:new Date(NOW+3600000).toISOString(),permissions:granted}};}});
   const r=await f.client.run(input('get_issue',{number:3}));assert.equal(r.errorCode,'TOKEN_PERMISSION_MISMATCH',JSON.stringify(granted));assert.equal(r.execution,'not_executed');
-  assert.equal(f.calls.some(c=>c.path.startsWith('/repos/')),false);assert.ok(!JSON.stringify(r).includes('secret-token'));
+  assert.equal(businessCalls(f.calls).length,0);assert.ok(!JSON.stringify(r).includes('secret-token'));
  }
  for(const repositories of [installed(['MontClip','cindy']),installed(['MontClip','MontClip'])]){const f=fixture({repositories});const r=await f.client.run(input('identity'));assert.equal(r.errorCode,'EXECUTION_REPOSITORY_SCOPE_MISMATCH');}
 });
@@ -200,7 +206,7 @@ test('review submits exactly once at current explicit commit id',async()=>{
 });
 test('expired execution token rejected; subsequent run gets fresh token, no cache',async()=>{
  const expired=fixture({expired:true});assert.equal((await expired.client.run(input('identity'))).errorCode,'INVALID_INSTALLATION_TOKEN');
- const f=fixture();await f.client.run(input('identity'));await f.client.run(input('identity'));assert.equal(f.calls.filter(c=>c.path.endsWith('/access_tokens')).length,4);assert.equal(f.credentialsCalls(),2);
+ const f=fixture();await f.client.run(input('identity'));await f.client.run(input('identity'));assert.equal(f.calls.filter(c=>c.path.endsWith('/access_tokens')).length,6);assert.equal(f.credentialsCalls(),2);
 });
 test('write network error is unknown, sanitized, and not replayed',async()=>{
  const f=fixture({override:(path,init)=>path.endsWith('/comments')?{throw:true}:null});
@@ -529,7 +535,7 @@ test('no cache: narrowing the installation on GitHub applies to the very next ca
  const business=f.calls.filter(c=>c.path.includes('/issues/'));
  assert.equal(business.length,1,'only the first call reached the repository');
  const tokens=f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.parsed);
- assert.equal(tokens.length,2,'a new token for each call that got that far; none for the refused permission');
+ assert.equal(tokens.length,3,'first call: resolve + execution token; second: resolve refused; third: none (permission checked first)');
  assert.equal(f.calls.filter(c=>c.path==='/app').length,3,'the App is read again on every call');
 });
 test('update_file to the default branch is refused before any file read or write',async()=>{
@@ -537,4 +543,43 @@ test('update_file to the default branch is refused before any file read or write
  const r=await f.client.run(input('update_file',{path:'a.txt',branch:'main',expected_sha:null,message:'x',content_base64:'dGVzdA=='}));
  assert.equal(r.errorCode,'DEFAULT_BRANCH_WRITE_REFUSED');assert.equal(r.execution,'not_executed');
  assert.equal(f.calls.some(c=>c.path.includes('/contents/')),false);assert.equal(f.calls.some(c=>c.method==='PUT'),false);
+});
+// QQ on ADR #34 (5914736615 point 2): the name is resolved to its repository ID first; the execution
+// token is requested by that ID and must cover exactly that repository.
+test('repository ID: the name is resolved with a metadata-only token, the execution token is requested by ID only',async()=>{
+ const f=fixture({account:'deja'});
+ const r=await f.client.run(input('comment_issue',{number:1,body:'x'},'deja','oppie-github'));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.parsed);
+ assert.deepEqual(grants,[{repositories:['oppie-github'],permissions:{metadata:'read'}},{repository_ids:[1000+INSTALLED.indexOf('oppie-github')],permissions:{metadata:'read',issues:'write'}}]);
+ assert.ok(f.calls.findIndex(c=>c.path==='/repos/good-night-oppie/oppie-github')<f.calls.findIndex(c=>c.parsed?.repository_ids),'resolved before the execution token');
+});
+test('repository ID: a token covering another repository with the same name is refused before any business call',async()=>{
+ const f=fixture({repositories:{total_count:1,repositories:[{id:999999,name:'MontClip',full_name:'good-night-oppie/MontClip'}]}});
+ const r=await f.client.run(input('get_issue',{number:3}));
+ assert.equal(r.errorCode,'EXECUTION_REPOSITORY_SCOPE_MISMATCH');assert.equal(businessCalls(f.calls).length,0);
+});
+test('repository ID: a name that resolves outside good-night-oppie or to a malformed record is refused before the execution token',async()=>{
+ for(const data of [{id:1000,name:'MontClip',full_name:'other/MontClip',owner:{login:'other'},default_branch:'main'},{id:'1000',name:'MontClip',full_name:'good-night-oppie/MontClip',owner:{login:'good-night-oppie'}},{id:1000,name:'cindy',full_name:'good-night-oppie/cindy',owner:{login:'good-night-oppie'}}]){
+  const f=fixture({override:(p,i)=>p==='/repos/good-night-oppie/MontClip'&&i.method==='GET'?{status:200,data}:null});
+  const r=await f.client.run(input('get_issue',{number:3}));
+  assert.equal(r.errorCode,'REPOSITORY_RESOLUTION_FAILED',JSON.stringify(data));assert.equal(executionTokens(f.calls).length,0);
+ }
+});
+// QQ on ADR #34 (5914736615 point 3): writes to the default branch are refused before any request
+// that could write, and before the execution token.
+test('default branch: create_branch, update_file, edit_file and commit_files to main stop before the execution token',async()=>{
+ const b=Buffer.from('OLD'),msg=['x','','Assisted-by: Cindy (https://cindy.app)'].join(String.fromCharCode(10));
+ for(const [operation,args] of [
+  ['create_branch',{branch:'main',sha:SHA}],
+  ['update_file',{path:'a.txt',branch:'main',expected_sha:null,message:'x',content_base64:'dGVzdA=='}],
+  ['edit_file',{...editArgs(b,Buffer.from('NEW')),branch:'main'}],
+  ['commit_files',{branch:'main',expected_head:SHA,message:msg,changes:[{path:'a.txt',content_base64:'dGVzdA=='}]}],
+ ]){
+  const f=fixture({account:'deja'});
+  const r=await f.client.run(input(operation,args,'deja'));
+  assert.equal(r.errorCode,'DEFAULT_BRANCH_WRITE_REFUSED',operation+JSON.stringify(r));assert.equal(r.execution,'not_executed');
+  assert.equal(executionTokens(f.calls).length,0,operation);assert.equal(businessCalls(f.calls).length,0,operation);
+  assert.equal(f.calls.some(c=>c.method&&c.method!=='GET'&&!c.path.endsWith('/access_tokens')),false,operation);
+ }
 });
