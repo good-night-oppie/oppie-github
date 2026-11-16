@@ -19,6 +19,8 @@ function failure(code) { const e = new Error(code); e.code = code; return e; }
 // entropy binds each key to the account and its pinned App ID; the installation is looked up on
 // GitHub on every call (owner 2026-11-16), so it is recorded as 'auto' and an installation change
 // does not invalidate the key. Changing the App ID makes the stored key unreadable (fail closed).
+// Keys imported by settings.2-6 were bound to the installation ID then written in the configuration;
+// that ID stays in the configuration for those accounts so their keys remain readable after upgrade.
 let configuredAccounts=()=>({});
 function setAccountResolver(fn){if(typeof fn!=='function')throw failure('INVALID_RESOLVER');configuredAccounts=fn;}
 function configured(account){
@@ -37,7 +39,7 @@ function metadata(account) {
       owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:account==='qq' };
   const c=configured(account);if(!c)throw failure('UNKNOWN_ACCOUNT');
   // Settings-page accounts have no pinned installation: it is looked up on GitHub on every call.
-  return { account, appId:String(c.appId), installationId:'auto', appSlug:c.appSlug||c.appName.toLowerCase(),
+  return { account, appId:String(c.appId), installationId:c.installationId?String(c.installationId):'auto', appSlug:c.appSlug||c.appName.toLowerCase(),
     owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:false };
 }
 function entropy(account) { const m=metadata(account); return 'oppie-github/v1/'+m.account+'/'+m.appId+'/'+m.installationId; }
@@ -135,6 +137,7 @@ function createStore(options={}) {
     try { await checkAcl(root); }catch(_){throw failure('UNSAFE_STORE_ACL');}
     return true;
   }
+  function shapeOnly(row){if(typeof row?.account!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(row.account)||!/^[a-f0-9]{64}$/.test(row.fingerprint)||typeof row.ciphertext!=='string')throw failure('INVALID_STORE');}
   function validateRow(row) {
     const fixed=metadata(row?.account);
     for(const k of Object.keys(fixed)){
@@ -153,10 +156,15 @@ function createStore(options={}) {
       const doc=JSON.parse(bytes.toString('utf8'));
       if(doc.version!==1||!Array.isArray(doc.accounts)||doc.accounts.length>64)throw Error();
       // Rows of accounts no longer in the configuration are kept on disk but never used.
-      const seen=new Set();for(const row of doc.accounts){
-        if(knownAccount(row?.account))validateRow(row);
+      // A settings-page account whose App identity changed since its key was imported is "stale":
+      // only that account needs a new key; the other accounts keep working (QQ on #34: one
+      // mismatch must not stop everyone). A compiled account's row must match exactly.
+      const seen=new Set(),stale=new Set();for(const row of doc.accounts){
+        if(knownAccount(row?.account)&&Object.hasOwn(APP_IDS,row.account))validateRow(row);
+        else if(knownAccount(row?.account)){try{validateRow(row);}catch(_){shapeOnly(row);stale.add(row.account);}}
         else if(typeof row?.account!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(row.account)||!/^[a-f0-9]{64}$/.test(row.fingerprint)||typeof row.ciphertext!=='string')throw Error();
         if(seen.has(row.account))throw Error();seen.add(row.account);}
+      Object.defineProperty(doc,'stale',{value:stale,enumerable:false});
       return doc;
     }catch(_){throw failure('INVALID_OR_UNSAFE_STORE');}finally{bytes?.fill(0);}
   }
@@ -190,7 +198,7 @@ function createStore(options={}) {
     }
     const doc=await read();
     const previous=doc.accounts.find(x=>x.account===fixed.account);
-    if(previous&&!args.replace)throw failure('ACCOUNT_EXISTS');
+    if(previous&&!args.replace&&!doc.stale.has(fixed.account))throw failure('ACCOUNT_EXISTS');
     let bytes;
     try {
       bytes=fromText?Buffer.from(args.pem_text,'utf8'):await plainFile(supplied,MAX_PEM);
@@ -210,7 +218,7 @@ function createStore(options={}) {
   }); }
   async function load(account) {
     metadata(account);await queue;const doc=await read();const row=doc.accounts.find(x=>x.account===account);
-    if(!row)throw failure('ACCOUNT_NOT_CONNECTED');let plain;
+    if(!row)throw failure('ACCOUNT_NOT_CONNECTED');if(doc.stale.has(account))throw failure('KEY_IMPORTED_FOR_OTHER_APP');let plain;
     try {
       plain=await unprotect(Buffer.from(row.ciphertext,'base64'),entropy(account));
       const key=crypto.createPrivateKey(plain);
@@ -220,7 +228,7 @@ function createStore(options={}) {
       return {...publicRow(row),privateKey:Buffer.from(plain).toString('utf8')};
     }catch(e){if(e.code==='SECURE_STORAGE_UNAVAILABLE')throw e;throw failure('KEY_UNAVAILABLE');}finally{plain?.fill(0);}
   }
-  async function list(){await queue;return (await read()).accounts.filter(r=>knownAccount(r.account)).map(publicRow);}
+  async function list(){await queue;const doc=await read();return doc.accounts.filter(r=>knownAccount(r.account)&&!doc.stale.has(r.account)).map(publicRow);}
   // Owner-only private files beside the key store (scope configuration and its audit log).
   // Same root, ACL and atomic-replace discipline as accounts.json.
   const PRIVATE_NAMES=['scope-config.json','scope-config-audit.jsonl','scope-config.key'];

@@ -37,7 +37,7 @@ function verify(text,state){
  const expected=Buffer.from(hmac(state.key,env.config),'hex');
  if(!crypto.timingSafeEqual(expected,Buffer.from(env.hmac,'hex')))invalid('signature mismatch');
  let parsed;try{parsed=JSON.parse(env.config);}catch(_){invalid('config not JSON');}
- const config=validateConfig(parsed);
+ const config=validateConfig(parsed,{legacy:true});
  if(config.revision!==state.revision&&config.revision!==state.revision+1)invalid('revision '+config.revision+' does not match the sealed revision '+state.revision);
  return config;
 }
@@ -68,7 +68,7 @@ function createSignedLoader({store}){
  // then seal the new revision. A crash between the two writes leaves revision = sealed + 1,
  // which verify() accepts; the next save seals it.
  async function save(file){
-  const config=validateConfig(file);let state;
+  const config=validateConfig(file,{legacy:true});let state;
   try{state=await store.readScopeKey();}catch(_){invalid('signing key unreadable');}
   const key=state?.key??crypto.randomBytes(32);
   const text=JSON.stringify(file);

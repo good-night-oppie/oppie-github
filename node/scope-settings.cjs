@@ -62,7 +62,17 @@ function createSettings({store,loader,verifyKey}){
   const {config:before}=await current();
   if(before.revision!==args.expectedRevision)fail('SCOPE_REVISION_CONFLICT',{revision:before.revision});
   if(!args.config||typeof args.config!=='object'||Array.isArray(args.config))fail('INVALID_PROPOSAL');
-  let after;try{after=validateConfig({...args.config,schemaVersion:1,revision:before.revision+1});}catch(e){fail('INVALID_SCOPE_CONFIGURATION',{reason:e.reason});}
+  // An account saved by settings.2-6 keeps its installation ID while its App ID is unchanged, even if
+  // the page leaves it out: its stored key is bound to it, and losing it would make that account
+  // need its key imported again (node/store.cjs). It never selects the installation.
+  const proposed={...args.config};
+  if(proposed.newAccounts&&typeof proposed.newAccounts==='object'&&!Array.isArray(proposed.newAccounts)){
+   proposed.newAccounts=Object.fromEntries(Object.entries(proposed.newAccounts).map(([n,a])=>{
+    const b=Object.hasOwn(before.newAccounts,n)?before.newAccounts[n]:null;
+    return [n,b?.installationId&&a&&typeof a==='object'&&a.appId===b.appId&&a.installationId===undefined?{...a,installationId:b.installationId}:a];
+   }));
+  }
+  let after;try{after=validateConfig({...proposed,schemaVersion:1,revision:before.revision+1},{keep:before.newAccounts});}catch(e){fail('INVALID_SCOPE_CONFIGURATION',{reason:e.reason});}
   const file=toFile(after),text=JSON.stringify(file,null,2)+'\n';
   if(Buffer.byteLength(text)>MAX_FILE_BYTES)fail('INVALID_SCOPE_CONFIGURATION',{reason:'too large'});
   const summary=summarize(before,after);

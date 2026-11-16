@@ -12,8 +12,12 @@ Since 1.5.0-preview.10-settings.7. Owner decision 2026-11-16 (oppie-github#8): ã
 
 - Per-operation token: each call requests a new installation token for the target repository only (plus MontClip when a ruleset change cites an owner comment there) with exactly the operation's permissions, `metadata:read` plus the list in `OPERATION_NEEDS` (`node/core.cjs`). It never asks for more than the installation has.
 - Before the token: if the installation lacks a level the operation needs, the call fails with `INSTALLATION_PERMISSION_MISSING`; `details.missing`, `details.fix` and two links say what to add and where (App permissions page, installation page).
+- Workflow files: a write that touches `.github/workflows/` (update_file, edit_file, or a commit_files change, delete or rename) adds `workflows:write` to that call's token request, because GitHub refuses workflow changes without it. Without it on the installation the call fails with `INSTALLATION_PERMISSION_MISSING` and `details.workflowFiles`. No other call asks for `workflows`, and an installation that holds it still passes `identity`.
+- Repository ID first (ADR 0003 section 2 step 6): the name, which must belong to good-night-oppie, is resolved to its numeric ID with a `metadata:read` token limited to that name (`GET /repos/good-night-oppie/<name>`; owner and full name must match, otherwise `REPOSITORY_RESOLUTION_FAILED`). The execution token is then requested with `repository_ids` only, so it is bound to that repository even if a name changes in between.
+- Default branch: a write to the default branch (create_branch, update_file, edit_file, commit_files) is refused from the resolved repository's `default_branch`, before the execution token and before any request that could write (`DEFAULT_BRANCH_WRITE_REFUSED`).
+- Confirmation cards (ADR 0003 section 4): `ruleset_update` (with the owner's written authorization and a one-use nonce) and `admin_update` (repository merge settings) need a host confirmation every time, whichever account runs them; without it the call fails with `OWNER_CONFIRMATION_REQUIRED` before the private key is read.
 - GitHub refuses a token for a repository outside the installation; the plugin reports `REPOSITORY_NOT_INSTALLED` with the repository name.
-- After the token: the granted permissions must equal the request (`TOKEN_PERMISSION_MISMATCH`) and the token's repository listing must equal the requested repositories (`EXECUTION_REPOSITORY_SCOPE_MISMATCH`).
+- After the token: the granted permissions must equal the request (`TOKEN_PERMISSION_MISMATCH`) and the token's repository listing must be exactly the resolved repository IDs with the same full names (`EXECUTION_REPOSITORY_SCOPE_MISMATCH`).
 - Identity stays pinned: App ID, slug and owner organisation must match (`APP_IDENTITY_MISMATCH`); the installation must be the App's, in good-night-oppie, an organisation and not suspended (`INSTALLATION_MISMATCH`).
 - Private keys only through the settings-page key field into the DPAPI store, never in logs, results or audit lines. No writes to a repository's default branch (`DEFAULT_BRANCH_WRITE_REFUSED`); `commit_files` is fast-forward only, force is never allowed. `ruleset_update` still needs the owner's written authorization comment, a one-use nonce and a host confirmation each time, whichever account runs it. `automaticReviews` is read only when the worker starts. The configuration file is signed (see Integrity); forged or replayed files fail closed.
 
@@ -90,6 +94,25 @@ Owner organisation; App and installation IDs of the twelve built-in accounts; pe
 3. Run `github` `identity` for `ad` (optionally with a `repo`) and check `installation_id`, `installationRepositorySelection`, `installationPermissions` and `availableOperations`.
 
 The key is encrypted with DPAPI entropy derived from the account and App ID (`installationId` is recorded as `auto` for settings-page accounts), so a later installation change does not make the stored key unreadable.
+
+## Upgrading from settings.2-6 (QQ on #34: an upgrade must not stop anyone)
+
+- A signed `scope-config.json` saved by settings.2-6 still loads. Its `repositories`, `optionalRepositories`, `twoRepositories`, `repositoryRoles` and `reviewOperations`, and the `role` and `operations` of added accounts, are ignored: the installation decides (owner 2026-11-16), including any earlier `role: none`. The next save writes the current format. New proposals from the settings page must use the current format.
+- An added account saved then (for example AD) keeps its `installationId` in the configuration, only because the private key imported then is DPAPI-bound to it. It never selects the installation or grants anything; the installation is still looked up on GitHub on every call. The settings page and the save path keep it while the App ID is unchanged; it cannot be changed or added for a new account.
+- If an added account's stored key no longer matches its App identity (for example after its App ID was changed in the settings page), only that account fails, with `KEY_IMPORTED_FOR_OTHER_APP`, and its key can be imported again; the key store and every other account keep working. A row of a built-in account that does not match its compiled pins still makes the store fail closed.
+- The twelve built-in accounts need nothing: without a configuration file they use the compiled values, and their keys are bound to the compiled App and installation IDs as before.
+
+## Caching
+
+None in this version. Every call reads `/app` and the installation again and requests a new token for that one operation, then drops it, so a narrowed installation applies to the very next call. Caching (ADR 0003 section 5) comes in a later step.
+
+## `identity` output
+
+The `identity` token asks for `metadata:read` only. Fields:
+- kept: `app_id`, `app_slug`, `owner`, `installationRepositorySelection`, `scopeRevision`, `scopeConfigSource`, `scopeConfigDigest`, and `expires_at` (with `repo`);
+- added: `installation_id`, `installationPermissions` (what the installation actually holds), `availableOperations` (operations the installation allows), `repository` (`{id, full_name}`, with `repo`), and `installationRepositories` as `{complete, repositories}`;
+- removed: `permissions` (role permissions), `repositories` (the old repository list) and `installationRepositoryCount`.
+Without `repo` no single-repository token is requested; one `metadata:read` token lists the installation's repositories.
 
 ## Trust boundary
 

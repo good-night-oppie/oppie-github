@@ -282,6 +282,8 @@ var require_scope_config = __commonJS({
     var BUILTIN_ACCOUNTS = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var DEFAULTS = Object.freeze({ accounts: BUILTIN_ACCOUNTS, newAccounts: Object.freeze({}) });
     var KEYS = Object.freeze(["schemaVersion", "revision", "accounts", "newAccounts"]);
+    var LEGACY_KEYS = Object.freeze(["repositories", "optionalRepositories", "twoRepositories", "repositoryRoles", "reviewOperations"]);
+    var LEGACY_ACCOUNT_KEYS = Object.freeze(["role", "operations"]);
     var ACCOUNT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
     var APP_NAME = /^[A-Za-z0-9-]{1,34}$/;
     var APP_SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -306,10 +308,10 @@ var require_scope_config = __commonJS({
       if (new Set(list).size !== list.length) invalid(what + " duplicate");
       return Object.freeze([...list]);
     }
-    function validateConfig(raw) {
+    function validateConfig(raw, { legacy = false, keep = {} } = {}) {
       if (raw === void 0 || raw === null) raw = {};
       if (!plain(raw)) invalid("root");
-      for (const k of Object.keys(raw)) if (!KEYS.includes(k)) invalid("unknown key " + k);
+      for (const k of Object.keys(raw)) if (!KEYS.includes(k) && !(legacy && LEGACY_KEYS.includes(k))) invalid("unknown key " + k);
       if (raw.schemaVersion !== void 0 && raw.schemaVersion !== 1) invalid("schemaVersion");
       const revision = raw.revision === void 0 ? 0 : raw.revision;
       if (!Number.isSafeInteger(revision) || revision < 0) invalid("revision");
@@ -319,15 +321,20 @@ var require_scope_config = __commonJS({
         const seenApps = /* @__PURE__ */ new Set();
         for (const [name, a] of Object.entries(raw.newAccounts)) {
           if (!ACCOUNT_NAME.test(name) || BUILTIN_ACCOUNTS.includes(name)) invalid("newAccounts name " + name);
-          if (!plain(a) || Object.keys(a).some((k) => !["appId", "appName", "appSlug"].includes(k))) invalid("newAccounts " + name);
+          if (!plain(a) || Object.keys(a).some((k) => !["appId", "appName", "appSlug", "installationId", ...legacy ? LEGACY_ACCOUNT_KEYS : []].includes(k))) invalid("newAccounts " + name);
           id(a.appId, "appId");
+          if (a.installationId !== void 0) {
+            id(a.installationId, "installationId");
+            const k = Object.hasOwn(keep, name) ? keep[name] : null;
+            if (!legacy && !(k && k.appId === a.appId && k.installationId === a.installationId)) invalid("newAccounts " + name + " installationId");
+          }
           if (BUILTIN_APP_IDS.includes(a.appId)) invalid("newAccounts " + name + " reuses a compiled App");
           if (typeof a.appName !== "string" || !APP_NAME.test(a.appName)) invalid("appName");
           const appSlug = a.appSlug === void 0 ? a.appName.toLowerCase() : a.appSlug;
           if (typeof appSlug !== "string" || !APP_SLUG.test(appSlug)) invalid("appSlug");
           if (seenApps.has(a.appId)) invalid("newAccounts duplicate App ID");
           seenApps.add(a.appId);
-          newAccounts[name] = Object.freeze({ appId: a.appId, appName: a.appName, appSlug });
+          newAccounts[name] = Object.freeze({ appId: a.appId, appName: a.appName, appSlug, ...a.installationId !== void 0 ? { installationId: a.installationId } : {} });
         }
       }
       const known = [...BUILTIN_ACCOUNTS, ...Object.keys(newAccounts)];
@@ -431,15 +438,6 @@ var require_core = __commonJS({
     function bad(code = "INVALID_ARGUMENTS") {
       throw new CoreError(code);
     }
-    var printable = (s) => [...s].map((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 ? " " : c).join("");
-    function configFailure(e) {
-      const reason = typeof e?.reason === "string" ? printable(e.reason).slice(0, 200) : void 0;
-      throw new CoreError("INVALID_SCOPE_CONFIGURATION", "not_executed", void 0, reason ? { reason } : void 0);
-    }
-    function checksFailed(code, checks) {
-      const failed = checks.filter((c) => !c.ok).map(({ ok, ...c }) => c);
-      if (failed.length) throw new CoreError(code, "not_executed", void 0, { failed });
-    }
     function configDigest(c) {
       return crypto.createHash("sha256").update(JSON.stringify(c)).digest("hex").slice(0, 16);
     }
@@ -485,13 +483,18 @@ var require_core = __commonJS({
     function permissions(operation) {
       return { metadata: "read", ...OPERATION_NEEDS[operation] };
     }
+    var WORKFLOW_DIR = ".github/workflows/";
+    function workflowPaths(preflight) {
+      const paths = ["file", "edit"].includes(preflight?.kind) ? [preflight.path] : preflight?.kind === "commit" ? preflight.plan.changes.flatMap((c) => c.from ? [c.from, c.path] : [c.path]) : [];
+      return paths.filter((p) => p.startsWith(WORKFLOW_DIR));
+    }
     var PERMISSION_RANK = Object.freeze({ none: 0, read: 1, write: 2 });
     function missingPermissions(actual, needed) {
       const level = (k) => obj(actual) && typeof actual[k] === "string" && Object.hasOwn(PERMISSION_RANK, actual[k]) ? actual[k] : "none";
       return Object.entries(needed).filter(([k, v]) => PERMISSION_RANK[level(k)] < PERMISSION_RANK[v]).map(([permission, required]) => ({ permission, required, installed: level(permission) }));
     }
-    function checkInstallation(actual, a, operation, installationId) {
-      const missing = missingPermissions(actual, permissions(operation));
+    function checkInstallation(actual, a, operation, installationId, needed = permissions(operation), workflowFiles = []) {
+      const missing = missingPermissions(actual, needed);
       if (!missing.length) return;
       const appPermissionsUrl = "https://github.com/organizations/" + OWNER + "/settings/apps/" + a.app_slug + "/permissions", installationUrl = "https://github.com/organizations/" + OWNER + "/settings/installations/" + installationId;
       throw new CoreError("INSTALLATION_PERMISSION_MISSING", "not_executed", void 0, {
@@ -499,13 +502,13 @@ var require_core = __commonJS({
         app: a.app_name,
         operation,
         missing,
+        ...workflowFiles.length ? { workflowFiles: workflowFiles.slice(0, 10) } : {},
         appPermissionsUrl,
         installationUrl,
         fix: "Add " + missing.map((m) => m.permission + ":" + m.required + " (installed: " + m.installed + ")").join(", ") + " in the App permissions (" + appPermissionsUrl + ") and accept the update on the installation page (" + installationUrl + ")."
       });
     }
-    function checkTokenPermissions(actual, operation) {
-      const requested = permissions(operation);
+    function checkTokenPermissions(actual, requested) {
       const granted = obj(actual) ? Object.fromEntries(Object.entries(actual).filter(([, v]) => v !== "none")) : null;
       if (!granted || Object.keys(granted).length !== Object.keys(requested).length || Object.entries(requested).some(([k, v]) => granted[k] !== v))
         throw new CoreError("TOKEN_PERMISSION_MISMATCH", "not_executed", void 0, { requested, granted: granted ? Object.fromEntries(Object.entries(granted).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && typeof v === "string").slice(0, 60)) : null });
@@ -562,8 +565,8 @@ var require_core = __commonJS({
           let config;
           try {
             config = await scopeConfig();
-          } catch (e) {
-            configFailure(e);
+          } catch (_) {
+            bad("INVALID_SCOPE_CONFIGURATION");
           }
           const account = configuredAccount(input2.account, config);
           if (!account) bad("ACCOUNT_REQUIRED");
@@ -762,6 +765,7 @@ var require_core = __commonJS({
             case "admin_update":
               exact(args, ["allow_squash_merge", "allow_merge_commit", "allow_rebase_merge", "delete_branch_on_merge"]);
               if (!Object.keys(args).length || Object.values(args).some((x) => typeof x !== "boolean")) bad();
+              if (!await authorize({ account: account.account, repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
               method = "PATCH";
               route = root;
               body = { ...args };
@@ -799,12 +803,7 @@ var require_core = __commonJS({
           secrets.push(jwt);
           pem = null;
           const app = await api("/app", jwt);
-          const shown = (v) => typeof v === "string" || Number.isSafeInteger(v) ? String(v).slice(0, 100) : v === void 0 || v === null ? "missing" : "invalid";
-          checksFailed("APP_IDENTITY_MISMATCH", [
-            { check: "app_id", expected: String(account.app_id), actual: shown(app?.id), ok: Number(app?.id) === account.app_id },
-            { check: "app_slug", expected: account.allowed_slugs.join(" or "), actual: shown(app?.slug), ok: typeof app?.slug === "string" && account.allowed_slugs.includes(app.slug) },
-            { check: "app_owner", expected: OWNER, actual: shown(app?.owner?.login), ok: app?.owner?.login === OWNER }
-          ]);
+          if (Number(app?.id) !== account.app_id || typeof app?.slug !== "string" || !account.allowed_slugs.includes(app.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
           let installation;
           if (account.installation_id) installation = await api("/app/installations/" + account.installation_id, jwt);
           else {
@@ -814,15 +813,9 @@ var require_core = __commonJS({
             installation = mine[0];
           }
           const installationId = account.installation_id || Number(installation?.id);
-          checksFailed("INSTALLATION_MISMATCH", [
-            { check: "installation_id", expected: account.installation_id ? String(account.installation_id) : "the App installation in " + OWNER, actual: shown(installation?.id), ok: Number.isSafeInteger(installationId) && Number(installation?.id) === installationId },
-            { check: "installation_app_id", expected: String(account.app_id), actual: shown(installation?.app_id), ok: Number(installation?.app_id) === account.app_id },
-            { check: "installation_owner", expected: OWNER, actual: shown(installation?.account?.login), ok: installation?.account?.login === OWNER },
-            { check: "installation_owner_type", expected: "Organization", actual: shown(installation?.account?.type), ok: installation?.account?.type === "Organization" },
-            { check: "repository_selection", expected: "selected or all", actual: shown(installation?.repository_selection), ok: ["selected", "all"].includes(installation?.repository_selection) },
-            { check: "suspended", expected: "not suspended", actual: installation?.suspended_at ? "suspended" : "not suspended", ok: !installation?.suspended_at }
-          ]);
-          checkInstallation(installation.permissions, account, operation, installationId);
+          if (!Number.isSafeInteger(installationId) || Number(installation?.id) !== installationId || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
+          const workflowFiles = workflowPaths(preflight), needed = workflowFiles.length ? { ...permissions(operation), workflows: "write" } : permissions(operation);
+          checkInstallation(installation.permissions, account, operation, installationId, needed, workflowFiles);
           async function listInstallation() {
             const probe = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
             if (typeof probe?.token !== "string" || !probe.token) bad("INVALID_INSTALLATION_TOKEN");
@@ -855,25 +848,52 @@ var require_core = __commonJS({
           const proofRepo = preflight?.kind === "owner_reference" ? preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1] : null;
           if (preflight?.kind === "owner_reference" && (!proofRepo || ![repo, "MontClip"].includes(proofRepo))) bad("OWNER_REFERENCE_SCOPE");
           const tokenRepos = [.../* @__PURE__ */ new Set([repo, ...proofRepo ? [proofRepo] : []])];
+          const notInstalled = (e) => {
+            if (e instanceof CoreError && [404, 422].includes(e.status)) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", e.status, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
+            throw e;
+          };
+          const validToken = (r) => {
+            if (typeof r?.token !== "string" || !r.token || Date.parse(r.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(r.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
+            secrets.push(r.token);
+            return r.token;
+          };
+          let resolveResponse;
+          try {
+            resolveResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: { metadata: "read" } });
+          } catch (e) {
+            notInstalled(e);
+          }
+          const resolveToken = validToken(resolveResponse);
+          checkTokenPermissions(resolveResponse.permissions, { metadata: "read" });
+          const resolved = /* @__PURE__ */ new Map();
+          for (const n of tokenRepos) {
+            let r;
+            try {
+              r = await api("/repos/" + OWNER + "/" + n, resolveToken);
+            } catch (e) {
+              notInstalled(e);
+            }
+            if (!obj(r) || !Number.isSafeInteger(r.id) || r.id < 1 || typeof r.name !== "string" || r.name.toLowerCase() !== n.toLowerCase() || r.owner?.login !== OWNER || r.full_name !== OWNER + "/" + r.name) bad("REPOSITORY_RESOLUTION_FAILED");
+            resolved.set(n, r);
+          }
+          const tokenIds = [...new Set([...resolved.values()].map((r) => r.id))];
+          if (["branch", "file", "edit", "commit"].includes(preflight?.kind) && (typeof resolved.get(repo).default_branch !== "string" || resolved.get(repo).default_branch === preflight.branch)) bad("DEFAULT_BRANCH_WRITE_REFUSED");
           let tokenResponse;
           try {
-            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: permissions(operation) });
+            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repository_ids: tokenIds, permissions: needed });
           } catch (e) {
-            if (e instanceof CoreError && e.status === 422) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", 422, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
-            throw e;
+            notInstalled(e);
           }
-          if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
-          const token = tokenResponse.token;
-          secrets.push(token);
-          checkTokenPermissions(tokenResponse.permissions, operation);
+          const token = validToken(tokenResponse);
+          checkTokenPermissions(tokenResponse.permissions, needed);
           const repos = await api("/installation/repositories?per_page=100", token);
-          const exactRepos = (r) => r?.total_count === tokenRepos.length && Array.isArray(r.repositories) && r.repositories.length === tokenRepos.length && r.repositories.every((x) => obj(x) && tokenRepos.includes(x.name) && x.full_name === OWNER + "/" + x.name && Number.isSafeInteger(x.id)) && new Set(r.repositories.map((x) => x.name)).size === tokenRepos.length;
+          const exactRepos = (r) => r?.total_count === tokenIds.length && Array.isArray(r.repositories) && r.repositories.length === tokenIds.length && r.repositories.every((x) => obj(x) && tokenIds.includes(x.id) && x.full_name === OWNER + "/" + x.name && [...resolved.values()].some((v) => v.id === x.id && v.full_name === x.full_name)) && new Set(r.repositories.map((x) => x.id)).size === tokenIds.length;
           if (!exactRepos(repos)) {
             const list = Array.isArray(repos?.repositories) ? repos.repositories : [];
             scopeDiagnostics = { expectedRepositories: tokenRepos.map((n) => OWNER + "/" + n), actualRepositories: list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n)) };
             bad("EXECUTION_REPOSITORY_SCOPE_MISMATCH");
           }
-          const target = repos.repositories.find((x) => x.name === repo);
+          const target = repos.repositories.find((x) => x.id === resolved.get(repo).id);
           if (preflight?.kind === "owner_reference") {
             const match = preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
             if (!match || match[1] !== proofRepo) bad("OWNER_REFERENCE_SCOPE");
@@ -899,8 +919,6 @@ var require_core = __commonJS({
             if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
           }
           if (["branch", "file", "edit", "commit"].includes(preflight?.kind)) {
-            const metadata = await api(root, token);
-            if (metadata?.default_branch === preflight.branch) bad("DEFAULT_BRANCH_WRITE_REFUSED");
             if (["file", "edit"].includes(preflight.kind)) {
               let current;
               try {
@@ -1191,7 +1209,7 @@ var require_store = __commonJS({
       return {
         account,
         appId: String(c.appId),
-        installationId: "auto",
+        installationId: c.installationId ? String(c.installationId) : "auto",
         appSlug: c.appSlug || c.appName.toLowerCase(),
         owner: "good-night-oppie",
         repositoryIds: [1441621868, 1446532339],
@@ -1320,6 +1338,9 @@ var require_store = __commonJS({
         }
         return true;
       }
+      function shapeOnly(row) {
+        if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw failure("INVALID_STORE");
+      }
       function validateRow(row) {
         const fixed = metadata(row?.account);
         for (const k of Object.keys(fixed)) {
@@ -1344,13 +1365,21 @@ var require_store = __commonJS({
           bytes = await plainFile(file, MAX_STORE);
           const doc = JSON.parse(bytes.toString("utf8"));
           if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > 64) throw Error();
-          const seen = /* @__PURE__ */ new Set();
+          const seen = /* @__PURE__ */ new Set(), stale = /* @__PURE__ */ new Set();
           for (const row of doc.accounts) {
-            if (knownAccount(row?.account)) validateRow(row);
-            else if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw Error();
+            if (knownAccount(row?.account) && Object.hasOwn(APP_IDS, row.account)) validateRow(row);
+            else if (knownAccount(row?.account)) {
+              try {
+                validateRow(row);
+              } catch (_) {
+                shapeOnly(row);
+                stale.add(row.account);
+              }
+            } else if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw Error();
             if (seen.has(row.account)) throw Error();
             seen.add(row.account);
           }
+          Object.defineProperty(doc, "stale", { value: stale, enumerable: false });
           return doc;
         } catch (_) {
           throw failure("INVALID_OR_UNSAFE_STORE");
@@ -1412,7 +1441,7 @@ var require_store = __commonJS({
           }
           const doc = await read();
           const previous = doc.accounts.find((x) => x.account === fixed.account);
-          if (previous && !args.replace) throw failure("ACCOUNT_EXISTS");
+          if (previous && !args.replace && !doc.stale.has(fixed.account)) throw failure("ACCOUNT_EXISTS");
           let bytes;
           try {
             bytes = fromText ? Buffer.from(args.pem_text, "utf8") : await plainFile(supplied, MAX_PEM);
@@ -1440,6 +1469,7 @@ var require_store = __commonJS({
         const doc = await read();
         const row = doc.accounts.find((x) => x.account === account);
         if (!row) throw failure("ACCOUNT_NOT_CONNECTED");
+        if (doc.stale.has(account)) throw failure("KEY_IMPORTED_FOR_OTHER_APP");
         let plain;
         try {
           plain = await unprotect(Buffer.from(row.ciphertext, "base64"), entropy(account));
@@ -1457,7 +1487,8 @@ var require_store = __commonJS({
       }
       async function list() {
         await queue;
-        return (await read()).accounts.filter((r) => knownAccount(r.account)).map(publicRow);
+        const doc = await read();
+        return doc.accounts.filter((r) => knownAccount(r.account) && !doc.stale.has(r.account)).map(publicRow);
       }
       const PRIVATE_NAMES = ["scope-config.json", "scope-config-audit.jsonl", "scope-config.key"];
       async function readPrivate(name) {

@@ -18,7 +18,8 @@ const REMOTE={app_id:5764947,app_slug:'adoppiexyz',installation_id:182084517,ins
 async function fixture(t,{verify}={}){
  const dir=await fsp.mkdtemp(path.join(await fsp.realpath(os.tmpdir()),'ogh-settings-'));t.after(()=>fsp.rm(dir,{recursive:true,force:true}));
  const key=crypto.randomBytes(32);
- const protect=async(data,context)=>{const iv=crypto.randomBytes(12);const c=crypto.createCipheriv('aes-256-gcm',key,iv);c.setAAD(Buffer.from(context));return Buffer.concat([iv,c.update(data),c.final(),c.getAuthTag()]);};
+ const contexts=[];
+ const protect=async(data,context)=>{contexts.push(context);const iv=crypto.randomBytes(12);const c=crypto.createCipheriv('aes-256-gcm',key,iv);c.setAAD(Buffer.from(context));return Buffer.concat([iv,c.update(data),c.final(),c.getAuthTag()]);};
  const unprotect=async(data,context)=>{const d=crypto.createDecipheriv('aes-256-gcm',key,data.subarray(0,12));d.setAAD(Buffer.from(context));d.setAuthTag(data.subarray(-16));return Buffer.concat([d.update(data.subarray(12,-16)),d.final()]);};
  const root=path.join(dir,'private');
  const store=createStore({root,platform:'win32',protect,unprotect,checkAcl:async()=>{},tighten:async()=>{}});
@@ -27,7 +28,7 @@ async function fixture(t,{verify}={}){
  const verifyCalls=[];
  const remote={...REMOTE};
  const verifyKey=async(input)=>{verifyCalls.push(input);return verify?verify(input):{ok:true,result:{...remote}};};
- return {root,store,loader,verifyCalls,remote,settings:createSettings({store,loader,verifyKey})};
+ return {root,store,loader,verifyCalls,remote,contexts,settings:createSettings({store,loader,verifyKey})};
 }
 const withAd=(extra={})=>({newAccounts:{ad:{...AD,...extra}}});
 const plus=(base,name,app)=>({...base,newAccounts:{...base.newAccounts,[name]:app},accounts:[...base.accounts,name]});
@@ -271,4 +272,77 @@ test('signed configuration: deleting both files after a save fails closed; never
  // Documented residual risk: a same-user process that also deletes the audit log gets the defaults.
  fs.unlinkSync(path.join(root,'scope-config-audit.jsonl'));
  assert.equal((await loader()).accounts.includes('gg'),true);
+});
+
+// Migration (QQ on #34 5914728822 / 5914736615): a machine that saved the settings page under
+// settings.2-6 keeps working after the upgrade, and AD's key imported then stays readable.
+const LEGACY_FILE={schemaVersion:1,revision:1,
+ repositories:{MontClip:1441621868,'MontClip-Cindy':1446532339},optionalRepositories:['MontClip-Cindy'],twoRepositories:{MontClip:1441621868,'MontClip-Cindy':1446532339},
+ repositoryRoles:{MontClip:{ad:'write',qq:'review'},'MontClip-Cindy':{ad:'none'}},reviewOperations:['identity','submit_review'],
+ accounts:['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox','ad'],
+ newAccounts:{ad:{...AD,appSlug:'adoppiexyz',installationId:182084517,role:'write',operations:['identity','comment_issue']}}};
+test('upgrade: a settings.4 signed configuration still loads, every account keeps working, AD key stays readable',async t=>{
+ const {settings,store,loader,contexts}=await fixture(t);
+ await loader.save(LEGACY_FILE);
+ // The key as settings.4 stored it: DPAPI-bound to account, App ID and the configured installation ID.
+ await store.importKeyText({account:'ad',pem_text:pem});
+ assert.equal(contexts.at(-1),'oppie-github/v1/ad/5764947/182084517');
+ const config=await loader.load();
+ assert.deepEqual(Object.keys(config).sort(),['accounts','newAccounts','revision','schemaVersion']);
+ assert.deepEqual(config.newAccounts.ad,{appId:5764947,appName:'ADOppieXYZ',appSlug:'adoppiexyz',installationId:182084517});
+ for(const name of [...Object.keys(ACCOUNTS),'ad'])assert.ok(configuredAccount(name,config),name);
+ // The installation ID never pins the installation: it is still looked up on GitHub.
+ assert.equal(configuredAccount('ad',config).installation_id,null);
+ assert.equal((await store.load('ad')).privateKey,pem);
+ const r=await settings.read();assert.equal(r.source,'file');assert.equal(r.error,undefined);
+ // Editing AD in the settings page keeps the installation ID (same App ID), so the key stays readable,
+ // and the saved file is in the current format.
+ const base=await baseConfig(settings);base.newAccounts.ad={...base.newAccounts.ad,appName:'ADOppieXYZ2'};
+ const plan=await settings.propose({config:base,expectedRevision:1});
+ await settings.save({config:base,expectedRevision:1,hash:plan.hash});
+ assert.equal((await store.load('ad')).privateKey,pem);
+ const saved=JSON.parse(JSON.parse(await store.readPrivate('scope-config.json')).config);
+ assert.deepEqual(Object.keys(saved).sort(),['accounts','newAccounts','revision','schemaVersion']);
+ assert.deepEqual(saved.newAccounts.ad,{appId:5764947,appName:'ADOppieXYZ2',appSlug:'adoppiexyz',installationId:182084517});
+});
+test('upgrade: the kept installation ID cannot be changed or invented from the settings page',async t=>{
+ const {settings,loader}=await fixture(t);
+ await loader.save(LEGACY_FILE);
+ const base=await baseConfig(settings);
+ for(const config of [
+  {...base,newAccounts:{...base.newAccounts,ad:{...base.newAccounts.ad,installationId:999}}},
+  {...base,newAccounts:{...base.newAccounts,ad:{...base.newAccounts.ad,appId:5764948}}},
+  plus(base,'ae',{appId:5764950,appName:'AEOppieXYZ',installationId:182084518}),
+  {...base,repositories:{MontClip:1}},
+  {...base,newAccounts:{...base.newAccounts,ad:{...base.newAccounts.ad,role:'write'}}},
+ ])await assert.rejects(settings.propose({config,expectedRevision:1}),{code:'INVALID_SCOPE_CONFIGURATION'},JSON.stringify(config.newAccounts));
+});
+test('upgrade: without the kept installation ID only AD would need a new key; nobody else stops',async t=>{
+ const {store,loader}=await fixture(t);
+ await loader.save(LEGACY_FILE);await store.importKeyText({account:'ad',pem_text:pem});await store.importKeyText({account:'bb',pem_text:pem});
+ assert.equal((await store.load('bb')).privateKey,pem);
+ const {installationId,...rest}=LEGACY_FILE.newAccounts.ad;
+ await loader.save({...LEGACY_FILE,revision:2,newAccounts:{ad:rest}});
+ // AD's stored row no longer matches: AD alone needs its key again (that is why the ID is kept);
+ // bb keeps working.
+ await assert.rejects(store.load('ad'),{code:'KEY_IMPORTED_FOR_OTHER_APP'});
+ assert.equal((await store.load('bb')).privateKey,pem);
+});
+test('upgrade: a page that leaves the installation ID out still keeps it, so no account loses its key',async t=>{
+ const {settings,store,loader}=await fixture(t);
+ await loader.save(LEGACY_FILE);await store.importKeyText({account:'ad',pem_text:pem});await store.importKeyText({account:'bb',pem_text:pem});
+ const base=await baseConfig(settings);const {installationId,...ad}=base.newAccounts.ad;
+ const config={...base,newAccounts:{...base.newAccounts,ad:{...ad,appName:'ADOppieXYZ2'}}};
+ const plan=await settings.propose({config,expectedRevision:1});await settings.save({config,expectedRevision:1,hash:plan.hash});
+ assert.equal((await loader.load()).newAccounts.ad.installationId,182084517);
+ assert.equal((await store.load('ad')).privateKey,pem);assert.equal((await store.load('bb')).privateKey,pem);
+ // A different App ID is a different App: no installation ID is carried over (old key no longer applies).
+ const other={...base,newAccounts:{...base.newAccounts,ad:{...ad,appId:5764948}}};
+ const p2=await settings.propose({config:other,expectedRevision:2});await settings.save({config:other,expectedRevision:2,hash:p2.hash});
+ assert.equal((await loader.load()).newAccounts.ad.installationId,undefined);
+ // AD's old key belonged to the old App: only AD needs a new key; bb and the store keep working.
+ assert.equal((await store.load('bb')).privateKey,pem);
+ await assert.rejects(store.load('ad'),{code:'KEY_IMPORTED_FOR_OTHER_APP'});
+ assert.deepEqual((await store.list()).map(r=>r.account),['bb']);
+ await store.importKeyText({account:'ad',pem_text:pem});assert.equal((await store.load('ad')).privateKey,pem);
 });

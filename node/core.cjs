@@ -45,12 +45,6 @@ const OPERATION_NEEDS=Object.freeze({
 const OPERATION_NAMES = Object.freeze(Object.keys(OPERATION_NEEDS));
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
-// Plain-language error step (PG design review #8 step 1): failures carry which check failed; the
-// worker turns them into Chinese text (node/messages.cjs). Decisions are unchanged. Details hold only
-// public identifiers (App/installation IDs, slugs, logins), never keys, key paths or tokens.
-const printable=s=>[...s].map(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127?' ':c).join('');
-function configFailure(e){const reason=typeof e?.reason==='string'?printable(e.reason).slice(0,200):undefined;throw new CoreError('INVALID_SCOPE_CONFIGURATION','not_executed',undefined,reason?{reason}:undefined);}
-function checksFailed(code,checks){const failed=checks.filter(c=>!c.ok).map(({ok,...c})=>c);if(failed.length)throw new CoreError(code,'not_executed',undefined,{failed});}
 function configDigest(c){return crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0,16);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
@@ -63,6 +57,13 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 // Any repository of the owner organisation; whether the App can use it is decided by its installation.
 function repoName(x){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!/^[A-Za-z0-9._-]{1,100}$/.test(n)||n==='.'||n==='..')bad('REPOSITORY_NOT_ALLOWED');return n;}
 function permissions(operation){return {metadata:'read',...OPERATION_NEEDS[operation]};}
+// GitHub refuses App changes under .github/workflows/ unless the token holds workflows:write.
+// Only file writes that touch such a path ask for it; nothing else ever does.
+const WORKFLOW_DIR='.github/workflows/';
+function workflowPaths(preflight){
+ const paths=['file','edit'].includes(preflight?.kind)?[preflight.path]:preflight?.kind==='commit'?preflight.plan.changes.flatMap(c=>c.from?[c.from,c.path]:[c.path]):[];
+ return paths.filter(p=>p.startsWith(WORKFLOW_DIR));
+}
 const PERMISSION_RANK=Object.freeze({none:0,read:1,write:2});
 // Levels the installation lacks for these needs (an installation may hold more than needed).
 function missingPermissions(actual,needed){
@@ -71,16 +72,15 @@ function missingPermissions(actual,needed){
 }
 // Installation: only an installation that lacks something this operation needs fails, and the
 // error says what is missing and where the owner adds it. Extra installation permissions are fine.
-function checkInstallation(actual,a,operation,installationId){
- const missing=missingPermissions(actual,permissions(operation));if(!missing.length)return;
+function checkInstallation(actual,a,operation,installationId,needed=permissions(operation),workflowFiles=[]){
+ const missing=missingPermissions(actual,needed);if(!missing.length)return;
  const appPermissionsUrl='https://github.com/organizations/'+OWNER+'/settings/apps/'+a.app_slug+'/permissions',installationUrl='https://github.com/organizations/'+OWNER+'/settings/installations/'+installationId;
- throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,appPermissionsUrl,installationUrl,
+ throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,...(workflowFiles.length?{workflowFiles:workflowFiles.slice(0,10)}:{}),appPermissionsUrl,installationUrl,
   fix:'Add '+missing.map(m=>m.permission+':'+m.required+' (installed: '+m.installed+')').join(', ')+' in the App permissions ('+appPermissionsUrl+') and accept the update on the installation page ('+installationUrl+').'});
 }
 // Execution token: exactly what was requested for this operation (nothing extra, nothing stronger,
 // nothing missing). The installation may hold more; the token never does.
-function checkTokenPermissions(actual,operation){
- const requested=permissions(operation);
+function checkTokenPermissions(actual,requested){
  const granted=obj(actual)?Object.fromEntries(Object.entries(actual).filter(([,v])=>v!=='none')):null;
  if(!granted||Object.keys(granted).length!==Object.keys(requested).length||Object.entries(requested).some(([k,v])=>granted[k]!==v))
   throw new CoreError('TOKEN_PERMISSION_MISMATCH','not_executed',undefined,{requested,granted:granted?Object.fromEntries(Object.entries(granted).filter(([k,v])=>/^[a-z_]{1,40}$/.test(k)&&typeof v==='string').slice(0,60)):null});
@@ -112,7 +112,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
   try{
    if(Buffer.byteLength(JSON.stringify(input??null),'utf8')>MAX_OPERATION_BYTES)bad('REQUEST_TOO_LARGE');
    exact(input,['account','repo','operation','args']);
-   let config;try{config=await scopeConfig();}catch(e){configFailure(e);}
+   let config;try{config=await scopeConfig();}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
    const account=configuredAccount(input.account,config);if(!account)bad('ACCOUNT_REQUIRED');const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    // Owner 2026-11-16: no role, operation or repository list in the plugin. Any repository of the
@@ -170,7 +170,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'dismiss_review':exact(args,['number','review_id','message']);method='PUT';route=root+'/pulls/'+number()+'/reviews/'+positive(args.review_id)+'/dismissals';body={message:nonempty(args.message,1000)};break;
     case 'enqueue_pull':exact(args,['number','commit_id']);preflight={kind:'enqueue',number:number(),sha:sha(args.commit_id)};method='POST';route='/graphql';break;
     case 'admin_get':exact(args,[]);route=root;break;
-    case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();method='PATCH';route=root;body={...args};break;
+    case 'admin_update':exact(args,['allow_squash_merge','allow_merge_commit','allow_rebase_merge','delete_branch_on_merge']);if(!Object.keys(args).length||Object.values(args).some(x=>typeof x!=='boolean'))bad();
+     // ADR 0003 section 4 (Deja 2026-11-16): repository merge settings need a host confirmation each
+     // time, whichever account runs them; checked before the private key is read.
+     if(!await authorize({account:account.account,repo,operation,args}))bad('OWNER_CONFIRMATION_REQUIRED');
+     method='PATCH';route=root;body={...args};break;
    }
    async function api(path,token,method='GET',payload,maxResponseBytes=2500000,timeoutMs=30000){
     if(!path.startsWith('/')||path.startsWith('//')||/[\r\n\\]/.test(path))bad('INVALID_API_ROUTE');
@@ -185,11 +189,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    secrets.push(pem);const jwt=makeJwt(account,pem,now());secrets.push(jwt);pem=null;
    const app=await api('/app',jwt);
    // Identity never follows a matching name alone: App ID and owner stay pinned.
-   const shown=v=>typeof v==='string'||Number.isSafeInteger(v)?String(v).slice(0,100):v===undefined||v===null?'missing':'invalid';
-   checksFailed('APP_IDENTITY_MISMATCH',[
-    {check:'app_id',expected:String(account.app_id),actual:shown(app?.id),ok:Number(app?.id)===account.app_id},
-    {check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug),ok:typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)},
-    {check:'app_owner',expected:OWNER,actual:shown(app?.owner?.login),ok:app?.owner?.login===OWNER}]);
+   if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
    // Compiled accounts keep their pinned installation; accounts added in the settings page use the
    // App's single installation in good-night-oppie, looked up now (follows GitHub on every call).
    let installation;
@@ -201,15 +201,10 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     installation=mine[0];
    }
    const installationId=account.installation_id||Number(installation?.id);
-   checksFailed('INSTALLATION_MISMATCH',[
-    {check:'installation_id',expected:account.installation_id?String(account.installation_id):'the App installation in '+OWNER,actual:shown(installation?.id),ok:Number.isSafeInteger(installationId)&&Number(installation?.id)===installationId},
-    {check:'installation_app_id',expected:String(account.app_id),actual:shown(installation?.app_id),ok:Number(installation?.app_id)===account.app_id},
-    {check:'installation_owner',expected:OWNER,actual:shown(installation?.account?.login),ok:installation?.account?.login===OWNER},
-    {check:'installation_owner_type',expected:'Organization',actual:shown(installation?.account?.type),ok:installation?.account?.type==='Organization'},
-    {check:'repository_selection',expected:'selected or all',actual:shown(installation?.repository_selection),ok:['selected','all'].includes(installation?.repository_selection)},
-    {check:'suspended',expected:'not suspended',actual:installation?.suspended_at?'suspended':'not suspended',ok:!installation?.suspended_at}]);
+   if(!Number.isSafeInteger(installationId)||Number(installation?.id)!==installationId||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
    // The installation may hold more than this operation needs (and usually does); only a lack fails.
-   checkInstallation(installation.permissions,account,operation,installationId);
+   const workflowFiles=workflowPaths(preflight),needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
+   checkInstallation(installation.permissions,account,operation,installationId,needed,workflowFiles);
    // identity also reports the whole installation (an unscoped metadata-only token, bounded listing).
    async function listInstallation(){
     const probe=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
@@ -232,20 +227,35 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const proofRepo=preflight?.kind==='owner_reference'?preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1]:null;
    if(preflight?.kind==='owner_reference'&&(!proofRepo||![repo,'MontClip'].includes(proofRepo)))bad('OWNER_REFERENCE_SCOPE');
    const tokenRepos=[...new Set([repo,...(proofRepo?[proofRepo]:[])])];
+   const notInstalled=e=>{if(e instanceof CoreError&&[404,422].includes(e.status))throw new CoreError('REPOSITORY_NOT_INSTALLED','not_executed',e.status,{repositories:tokenRepos.map(n=>OWNER+'/'+n)});throw e;};
+   const validToken=r=>{if(typeof r?.token!=='string'||!r.token||Date.parse(r.expires_at)<=now()+30000||!Number.isFinite(Date.parse(r.expires_at)))bad('INVALID_INSTALLATION_TOKEN');secrets.push(r.token);return r.token;};
+   // ADR 0003 section 2 step 6 (QQ 5914736615 point 2): resolve each repository name to its numeric
+   // ID first, with a metadata-only token limited to those names, then request the execution token by
+   // repository_ids so it covers exactly those repositories even if a name changes in between.
+   let resolveResponse;
+   try{resolveResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repositories:tokenRepos,permissions:{metadata:'read'}});}catch(e){notInstalled(e);}
+   const resolveToken=validToken(resolveResponse);checkTokenPermissions(resolveResponse.permissions,{metadata:'read'});
+   const resolved=new Map();
+   for(const n of tokenRepos){
+    let r;try{r=await api('/repos/'+OWNER+'/'+n,resolveToken);}catch(e){notInstalled(e);}
+    if(!obj(r)||!Number.isSafeInteger(r.id)||r.id<1||typeof r.name!=='string'||r.name.toLowerCase()!==n.toLowerCase()||r.owner?.login!==OWNER||r.full_name!==OWNER+'/'+r.name)bad('REPOSITORY_RESOLUTION_FAILED');
+    resolved.set(n,r);
+   }
+   const tokenIds=[...new Set([...resolved.values()].map(r=>r.id))];
+   // Default branch (QQ 5914736615 point 3): refused here, before the execution token and any write.
+   if(['branch','file','edit','commit'].includes(preflight?.kind)&&(typeof resolved.get(repo).default_branch!=='string'||resolved.get(repo).default_branch===preflight.branch))bad('DEFAULT_BRANCH_WRITE_REFUSED');
    let tokenResponse;
-   try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repositories:tokenRepos,permissions:permissions(operation)});}
-   catch(e){if(e instanceof CoreError&&e.status===422)throw new CoreError('REPOSITORY_NOT_INSTALLED','not_executed',422,{repositories:tokenRepos.map(n=>OWNER+'/'+n)});throw e;}
-   if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
-   const token=tokenResponse.token;secrets.push(token);checkTokenPermissions(tokenResponse.permissions,operation);
+   try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repository_ids:tokenIds,permissions:needed});}catch(e){notInstalled(e);}
+   const token=validToken(tokenResponse);checkTokenPermissions(tokenResponse.permissions,needed);
    const repos=await api('/installation/repositories?per_page=100',token);
-   const exactRepos=r=>r?.total_count===tokenRepos.length&&Array.isArray(r.repositories)&&r.repositories.length===tokenRepos.length&&r.repositories.every(x=>obj(x)&&tokenRepos.includes(x.name)&&x.full_name===OWNER+'/'+x.name&&Number.isSafeInteger(x.id))&&new Set(r.repositories.map(x=>x.name)).size===tokenRepos.length;
+   const exactRepos=r=>r?.total_count===tokenIds.length&&Array.isArray(r.repositories)&&r.repositories.length===tokenIds.length&&r.repositories.every(x=>obj(x)&&tokenIds.includes(x.id)&&x.full_name===OWNER+'/'+x.name&&[...resolved.values()].some(v=>v.id===x.id&&v.full_name===x.full_name))&&new Set(r.repositories.map(x=>x.id)).size===tokenIds.length;
    if(!exactRepos(repos)){
     // Diagnostics never include raw API objects or credentials.
     const list=Array.isArray(repos?.repositories)?repos.repositories:[];
     scopeDiagnostics={expectedRepositories:tokenRepos.map(n=>OWNER+'/'+n),actualRepositories:list.slice(0,100).map(r=>r?.full_name).filter(n=>typeof n==='string'&&/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n))};
     bad('EXECUTION_REPOSITORY_SCOPE_MISMATCH');
    }
-   const target=repos.repositories.find(x=>x.name===repo);
+   const target=repos.repositories.find(x=>x.id===resolved.get(repo).id);
    if(preflight?.kind==='owner_reference'){
     const match=preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
     if(!match||match[1]!==proofRepo)bad('OWNER_REFERENCE_SCOPE');
@@ -259,7 +269,6 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     body={query:'mutation($id:ID!,$head:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){mergeQueueEntry{id}}}',variables:{id:pr.node_id,head:preflight.sha}};}
    if(preflight?.kind==='review'){const pr=await api(root+'/pulls/'+preflight.number,token);if(pr?.head?.sha!==preflight.sha)bad('STALE_HEAD');if(pr?.state!=='open'||pr?.draft)bad('PR_NOT_REVIEWABLE');}
    if(['branch','file','edit','commit'].includes(preflight?.kind)){
-    const metadata=await api(root,token);if(metadata?.default_branch===preflight.branch)bad('DEFAULT_BRANCH_WRITE_REFUSED');
     if(['file','edit'].includes(preflight.kind)){let current;try{current=await api(root+'/contents/'+filePath(preflight.path)+'?ref='+encodeURIComponent(preflight.branch),token);}catch(e){if(e.status!==404||preflight.sha!==null)throw e;}if((current?.sha??null)!==preflight.sha)bad('STALE_FILE');if(preflight.kind==='edit'){
       // Reject stale/oversized metadata before spending a blob request.
       if(current.type!=='file'||!Number.isSafeInteger(current.size)||current.size<0)bad('INVALID_FILE_BASELINE');

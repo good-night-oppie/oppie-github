@@ -43,9 +43,6 @@ const ERRORS = {
 function say(text, isError) { const el = $('#message'); el.textContent = text || ''; el.className = isError ? 'error' : 'muted'; }
 function explain(result) {
   if (result?.ok) return '';
-  // The worker adds a plain reason and the next step (node/messages.cjs); older answers fall back here.
-  const next = result?.next?.who && result?.next?.action ? ' 下一步（' + result.next.who + '）：' + result.next.action : '';
-  if (typeof result?.message === 'string' && result.message && result?.next) return result.message + next + '（' + result.errorCode + '）';
   const reason = result?.details?.reason ? '（' + result.details.reason + '）' : '';
   return (ERRORS[result?.errorCode] || ('未完成：' + (result?.errorCode || '未知错误'))) + reason;
 }
@@ -105,7 +102,10 @@ $('#acc-apply').onclick = () => {
   const appName = $('#acc-app-name').value.trim();
   if (!/^[A-Za-z0-9-]{1,34}$/.test(appName)) return say('App 名称只能包含字母、数字和短横线。', true);
   const appSlug = ($('#acc-slug').value.trim() || appName.toLowerCase());
-  draft.newAccounts[name] = { appId, appName, appSlug };
+  // Keep the installation ID of an account saved by settings.2-6 while its App ID is unchanged:
+  // its stored private key is bound to it (see node/store.cjs).
+  const before = draft.newAccounts[name];
+  draft.newAccounts[name] = { appId, appName, appSlug, ...(before && before.appId === appId && before.installationId ? { installationId: before.installationId } : {}) };
   if (!draft.accounts.includes(name)) draft.accounts.push(name);
   say('已放入待保存：' + name + '。点「保存」后生效。'); render();
 };
