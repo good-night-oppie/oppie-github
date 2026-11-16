@@ -77,7 +77,7 @@ test('file import (#39): no phase, extra fields or a store step without a hash a
   if(name==='./operations.cjs')return {};
   return require(name);
  }});
- const file={account:'ad',pem_path:'C:/keys/ad.pem'};
+ const file={account:'ad',pem_path:path.join(require('node:os').tmpdir(),'ad.pem')};
  const requests=[{...file},{...file,phase:'store'},{...file,phase:'store',hash:'not-a-hash'},{...file,phase:'inspect',confirmed:true},{...file,phase:'save'}];
  for(const [id,params] of requests.entries())await handler(JSON.stringify({jsonrpc:'2.0',id,method:'import',params}));
  assert.equal(touched,0);assert.equal(output.length,requests.length);
@@ -103,7 +103,7 @@ test('file import (#39): the key is stored only with the hash of what the owner 
   if(name==='./operations.cjs')return {};
   return require(name);
  }});
- const file={account:'ad',pem_path:'C:/keys/ad.pem'};
+ const file={account:'ad',pem_path:path.join(require('node:os').tmpdir(),'ad.pem')};
  await handler(JSON.stringify({jsonrpc:'2.0',id:1,method:'import',params:{...file,phase:'inspect'}}));
  const seen=output[0].result;assert.equal(seen.ok,true,JSON.stringify(output[0]));assert.match(seen.hash,/^[0-9a-f]{64}$/);assert.ok(seen.card.includes('私钥指纹'));assert.equal(stored.length,0,'inspect stores nothing');
  await handler(JSON.stringify({jsonrpc:'2.0',id:2,method:'import',params:{...file,phase:'store',hash:'0'.repeat(64)}}));
