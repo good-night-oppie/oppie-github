@@ -282,6 +282,8 @@ var require_scope_config = __commonJS({
     var BUILTIN_ACCOUNTS = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var DEFAULTS = Object.freeze({ accounts: BUILTIN_ACCOUNTS, newAccounts: Object.freeze({}) });
     var KEYS = Object.freeze(["schemaVersion", "revision", "accounts", "newAccounts"]);
+    var LEGACY_KEYS = Object.freeze(["repositories", "optionalRepositories", "twoRepositories", "repositoryRoles", "reviewOperations"]);
+    var LEGACY_ACCOUNT_KEYS = Object.freeze(["role", "operations"]);
     var ACCOUNT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
     var APP_NAME = /^[A-Za-z0-9-]{1,34}$/;
     var APP_SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -306,10 +308,10 @@ var require_scope_config = __commonJS({
       if (new Set(list).size !== list.length) invalid(what + " duplicate");
       return Object.freeze([...list]);
     }
-    function validateConfig(raw) {
+    function validateConfig(raw, { legacy = false, keep = {} } = {}) {
       if (raw === void 0 || raw === null) raw = {};
       if (!plain(raw)) invalid("root");
-      for (const k of Object.keys(raw)) if (!KEYS.includes(k)) invalid("unknown key " + k);
+      for (const k of Object.keys(raw)) if (!KEYS.includes(k) && !(legacy && LEGACY_KEYS.includes(k))) invalid("unknown key " + k);
       if (raw.schemaVersion !== void 0 && raw.schemaVersion !== 1) invalid("schemaVersion");
       const revision = raw.revision === void 0 ? 0 : raw.revision;
       if (!Number.isSafeInteger(revision) || revision < 0) invalid("revision");
@@ -319,15 +321,20 @@ var require_scope_config = __commonJS({
         const seenApps = /* @__PURE__ */ new Set();
         for (const [name, a] of Object.entries(raw.newAccounts)) {
           if (!ACCOUNT_NAME.test(name) || BUILTIN_ACCOUNTS.includes(name)) invalid("newAccounts name " + name);
-          if (!plain(a) || Object.keys(a).some((k) => !["appId", "appName", "appSlug"].includes(k))) invalid("newAccounts " + name);
+          if (!plain(a) || Object.keys(a).some((k) => !["appId", "appName", "appSlug", "installationId", ...legacy ? LEGACY_ACCOUNT_KEYS : []].includes(k))) invalid("newAccounts " + name);
           id(a.appId, "appId");
+          if (a.installationId !== void 0) {
+            id(a.installationId, "installationId");
+            const k = Object.hasOwn(keep, name) ? keep[name] : null;
+            if (!legacy && !(k && k.appId === a.appId && k.installationId === a.installationId)) invalid("newAccounts " + name + " installationId");
+          }
           if (BUILTIN_APP_IDS.includes(a.appId)) invalid("newAccounts " + name + " reuses a compiled App");
           if (typeof a.appName !== "string" || !APP_NAME.test(a.appName)) invalid("appName");
           const appSlug = a.appSlug === void 0 ? a.appName.toLowerCase() : a.appSlug;
           if (typeof appSlug !== "string" || !APP_SLUG.test(appSlug)) invalid("appSlug");
           if (seenApps.has(a.appId)) invalid("newAccounts duplicate App ID");
           seenApps.add(a.appId);
-          newAccounts[name] = Object.freeze({ appId: a.appId, appName: a.appName, appSlug });
+          newAccounts[name] = Object.freeze({ appId: a.appId, appName: a.appName, appSlug, ...a.installationId !== void 0 ? { installationId: a.installationId } : {} });
         }
       }
       const known = [...BUILTIN_ACCOUNTS, ...Object.keys(newAccounts)];
@@ -1176,7 +1183,7 @@ var require_store = __commonJS({
       return {
         account,
         appId: String(c.appId),
-        installationId: "auto",
+        installationId: c.installationId ? String(c.installationId) : "auto",
         appSlug: c.appSlug || c.appName.toLowerCase(),
         owner: "good-night-oppie",
         repositoryIds: [1441621868, 1446532339],
@@ -1305,6 +1312,9 @@ var require_store = __commonJS({
         }
         return true;
       }
+      function shapeOnly(row) {
+        if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw failure("INVALID_STORE");
+      }
       function validateRow(row) {
         const fixed = metadata(row?.account);
         for (const k of Object.keys(fixed)) {
@@ -1329,13 +1339,21 @@ var require_store = __commonJS({
           bytes = await plainFile(file, MAX_STORE);
           const doc = JSON.parse(bytes.toString("utf8"));
           if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > 64) throw Error();
-          const seen = /* @__PURE__ */ new Set();
+          const seen = /* @__PURE__ */ new Set(), stale = /* @__PURE__ */ new Set();
           for (const row of doc.accounts) {
-            if (knownAccount(row?.account)) validateRow(row);
-            else if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw Error();
+            if (knownAccount(row?.account) && Object.hasOwn(APP_IDS, row.account)) validateRow(row);
+            else if (knownAccount(row?.account)) {
+              try {
+                validateRow(row);
+              } catch (_) {
+                shapeOnly(row);
+                stale.add(row.account);
+              }
+            } else if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw Error();
             if (seen.has(row.account)) throw Error();
             seen.add(row.account);
           }
+          Object.defineProperty(doc, "stale", { value: stale, enumerable: false });
           return doc;
         } catch (_) {
           throw failure("INVALID_OR_UNSAFE_STORE");
@@ -1397,7 +1415,7 @@ var require_store = __commonJS({
           }
           const doc = await read();
           const previous = doc.accounts.find((x) => x.account === fixed.account);
-          if (previous && !args.replace) throw failure("ACCOUNT_EXISTS");
+          if (previous && !args.replace && !doc.stale.has(fixed.account)) throw failure("ACCOUNT_EXISTS");
           let bytes;
           try {
             bytes = fromText ? Buffer.from(args.pem_text, "utf8") : await plainFile(supplied, MAX_PEM);
@@ -1425,6 +1443,7 @@ var require_store = __commonJS({
         const doc = await read();
         const row = doc.accounts.find((x) => x.account === account);
         if (!row) throw failure("ACCOUNT_NOT_CONNECTED");
+        if (doc.stale.has(account)) throw failure("KEY_IMPORTED_FOR_OTHER_APP");
         let plain;
         try {
           plain = await unprotect(Buffer.from(row.ciphertext, "base64"), entropy(account));
@@ -1442,7 +1461,8 @@ var require_store = __commonJS({
       }
       async function list() {
         await queue;
-        return (await read()).accounts.filter((r) => knownAccount(r.account)).map(publicRow);
+        const doc = await read();
+        return doc.accounts.filter((r) => knownAccount(r.account) && !doc.stale.has(r.account)).map(publicRow);
       }
       const PRIVATE_NAMES = ["scope-config.json", "scope-config-audit.jsonl", "scope-config.key"];
       async function readPrivate(name) {
