@@ -16,7 +16,12 @@ const crypto=require('node:crypto');
 const {validateConfig,DEFAULT_CONFIG,MAX_FILE_BYTES}=require('./scope-config.cjs');
 
 const FORMAT='oppie-scope-config/v1';
-const CONFIG_FILE='scope-config.json',KEY_FILE='scope-config.key';
+const CONFIG_FILE='scope-config.json',KEY_FILE='scope-config.key',AUDIT_FILE='scope-config-audit.jsonl';
+// QQ review 2026-11-16 (#33): once the owner has saved, deleting both scope-config.json and
+// scope-config.key must not silently revert to the compiled defaults. The audit log records saves.
+function auditHasSave(text){
+ return typeof text==='string'&&text.split('\n').some(l=>{if(!l.trim())return false;try{return JSON.parse(l).event==='save';}catch(_){return /"event"\s*:\s*"save"/.test(l);}});
+}
 function invalid(reason){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';e.reason=reason;throw e;}
 function hmac(key,text){return crypto.createHmac('sha256',key).update(text,'utf8').digest('hex');}
 function stampOf(file){try{const s=fs.statSync(file);return s.size+':'+s.mtimeMs+':'+s.ctimeMs+':'+s.ino;}catch(e){if(e.code==='ENOENT')return 'none';return 'error';}}
@@ -38,14 +43,18 @@ function verify(text,state){
 }
 
 function createSignedLoader({store}){
- const root=store.paths.root,configPath=path.join(root,CONFIG_FILE),keyPath=path.join(root,KEY_FILE);
+ const root=store.paths.root,configPath=path.join(root,CONFIG_FILE),keyPath=path.join(root,KEY_FILE),auditPath=path.join(root,AUDIT_FILE);
  let cache=null,last=DEFAULT_CONFIG;
  async function load(){
-  const stamp=stampOf(configPath)+'|'+stampOf(keyPath);
+  const files=stampOf(configPath)+'|'+stampOf(keyPath),stamp=files+'|'+stampOf(auditPath);
   if(stamp.includes('error'))invalid('unreadable');
   if(cache?.stamp===stamp)return cache.config;
   let config;
-  if(stamp==='none|none')config=DEFAULT_CONFIG;
+  if(files==='none|none'){
+   let audit;try{audit=await store.readPrivate(AUDIT_FILE);}catch(_){invalid('audit log unreadable or unsafe ACL');}
+   if(auditHasSave(audit))invalid('configuration and key deleted after a save');
+   config=DEFAULT_CONFIG;
+  }
   else{
    let text,state;
    try{text=await store.readPrivate(CONFIG_FILE);state=await store.readScopeKey();}catch(_){invalid('unreadable or unsafe ACL');}
@@ -69,4 +78,4 @@ function createSignedLoader({store}){
  }
  return Object.assign(load,{load,current,save,paths:{configPath,keyPath}});
 }
-module.exports={createSignedLoader,verify,hmac,FORMAT,CONFIG_FILE,KEY_FILE};
+module.exports={createSignedLoader,verify,hmac,auditHasSave,FORMAT,CONFIG_FILE,KEY_FILE,AUDIT_FILE};
