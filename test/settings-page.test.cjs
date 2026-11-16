@@ -40,7 +40,7 @@ test('add AD and a repository: summary, confirmation hash, atomic save, hot relo
  const plan=await settings.propose({config,expectedRevision:0});
  assert.equal(plan.ok,true);assert.equal(plan.nextRevision,1);
  assert.match(plan.summary,/加仓库 new-repo#1999999999（11 个账号可写：bb,cindy,deja,dd,gg,jj,pg,rea,video,vv,reviewinbox；只读评审：ad；qq 含规则集\/驳回\/合并队列\/仓库设置等专属操作；未写入角色表的账号按自身角色）/);
- assert.match(plan.summary,/加账号 ad\(App 5764947\/安装 182084517\/adoppiexyz\/只读\+评审\)/);
+ assert.match(plan.summary,/加账号 ad\(App 5764947\/安装 182084517\/adoppiexyz\/只读\+评审\/全部仓库可用\)/);
  assert.ok(('保存伙伴 GitHub 配置 r0→r1：'+plan.summary).length<=300);
  // A different payload than the one confirmed is refused.
  await assert.rejects(settings.save({config:{...config,repositories:{...config.repositories,'x':1888888888}},expectedRevision:0,hash:plan.hash}),{code:'PROPOSAL_CHANGED'});
@@ -212,7 +212,7 @@ test('confirmation summary names who can write an added repository and which acc
  const after=validateConfig({repositories:{...before.repositories,'x-repo':1777777777},optionalRepositories:['cindy','x-repo'],repositoryRoles:{...before.repositoryRoles,'x-repo':{dd:'comment_review'}},newAccounts:{ad:{...AD,role:'write'}}});
  const s=summarize(before,after);
  assert.match(s,/x-repo#1777777777（11 个账号可写：bb,cindy,deja,gg,jj,pg,rea,video,vv,reviewinbox,ad；只读评审：dd；qq 含/);
- assert.match(s,/ad\(App 5764947\/安装 182084517\/adoppiexyz\/可写名单内全部仓库\)/);
+ assert.match(s,/ad\(App 5764947\/安装 182084517\/adoppiexyz\/可写名单内全部仓库\/全部仓库可用\)/);
 });
 // QQ review 2026-11-16, item 5: the host never deletes a manual secret after injection.
 test('main.js removes the vault copy of an App key at startup and after every import attempt, even when it fails',async()=>{
@@ -251,4 +251,16 @@ test('signed configuration: deleting both files after a save fails closed; never
  // Documented residual risk: a same-user process that also deletes the audit log gets the defaults.
  fs.unlinkSync(path.join(root,'scope-config-audit.jsonl'));
  assert.equal((await loader()).accounts.includes('gg'),true);
+});
+// BB (#29 vs #33): the card states the reviewer role, an accepted broader installation and the
+// repositories the owner made unusable for the account (e.g. cindy for AD).
+test('confirmation summary shows reviewer role, broader installation and unusable repositories',()=>{
+ const {summarize}=require('../node/scope-settings.cjs');
+ const before=validateConfig({});
+ const after=validateConfig({newAccounts:{ad:{...AD,role:'reviewer',allowBroaderInstallation:true}},repositoryRoles:{...before.repositoryRoles,cindy:{...before.repositoryRoles.cindy,ad:'none'}}});
+ const s=summarize(before,after);
+ assert.match(s,/加账号 ad\(App 5764947\/安装 182084517\/adoppiexyz\/只读\+评论\+评审\/安装权限可更宽\/不可用 cindy\)/);
+ assert.ok(('保存伙伴 GitHub 配置 r0→r1：'+s).length<=300,s.length);
+ const repo=summarize(after,validateConfig({...after,schemaVersion:undefined,revision:undefined,newAccounts:{ad:{...AD,role:'reviewer',allowBroaderInstallation:true}},repositories:{...after.repositories,'x-repo':1777777777},optionalRepositories:['cindy','x-repo'],repositoryRoles:{...after.repositoryRoles,'x-repo':{ad:'none'}}}));
+ assert.match(repo,/x-repo#1777777777（.*；不可用：ad；/);
 });
