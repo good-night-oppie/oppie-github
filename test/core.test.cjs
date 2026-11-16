@@ -54,6 +54,13 @@ for(const stage of ['installation','execution']){
     if(path==='/installation/repositories'&&++reads===(stage==='installation'?1:2))return {status:200,data:actual};
    }});
    const r=await f.client.run(input('get_issue',{number:3}));
+   // 2026-11-15: an extra installed repository is ignored (owner granted all repositories);
+   // the execution token is still narrowed and checked exactly.
+   if(stage==='installation'&&variant==='extra'){
+    assert.equal(r.ok,true,r.errorCode);
+    const exec=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;
+    assert.ok(!exec.repository_ids.includes(99));return;
+   }
    assert.equal(r.errorCode,stage==='installation'?'INSTALLATION_REPOSITORY_SCOPE_MISMATCH':'EXECUTION_REPOSITORY_SCOPE_MISMATCH');
    assert.equal(r.execution,'not_executed');
    assert.deepEqual(r.diagnostics.expectedRepositories,repos.repositories.map(x=>x.full_name));
