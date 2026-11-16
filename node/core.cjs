@@ -6,7 +6,8 @@ const commitFilesModule=require('./commit-files.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
 const MAX_INSTALLATION_PAGES=10; // 1000 repositories; a larger listing fails closed as incomplete.
 const OWNER = 'good-night-oppie';
-const {initialPolicy,validatePolicy,repositoryRestriction,OPTIONAL_REPOSITORIES}=require('./repository-policy.cjs');
+const {initialPolicy,validatePolicy,repositoryRestriction}=require('./repository-policy.cjs');
+const {DEFAULT_CONFIG,ACCOUNT_OPERATION_CEILING}=require('./scope-config.cjs');
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
@@ -19,11 +20,22 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
 ].map(([account,app_id,installation_id])=>[account,Object.freeze({account,app_id,installation_id,
  app_name:APP_NAMES[account],app_slug:APP_NAMES[account].toLowerCase(),app_slug_status:'expected_not_live',
  allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'})])));
+// Accounts added through the owner's scope configuration (e.g. AD) get the same pinned shape
+// as compiled accounts: App ID, installation ID and slugs come from the file, never from GitHub.
+// They are never admin and never QQ. Compiled accounts cannot be redefined by configuration.
+function configuredAccount(name,config=DEFAULT_CONFIG){
+ if(typeof name!=='string'||!config.accounts.includes(name))return null;
+ if(Object.hasOwn(ACCOUNTS,name))return ACCOUNTS[name];
+ const a=Object.hasOwn(config.newAccounts,name)?config.newAccounts[name]:null;if(!a)return null;
+ const slug=a.appSlug||a.appName.toLowerCase();
+ return Object.freeze({account:name,app_id:a.appId,installation_id:a.installationId,app_name:a.appName,app_slug:slug,app_slug_status:'expected_not_live',allowed_slugs:Object.freeze([...new Set([slug,'oppie-agent-'+name])]),admin:false,configured:true,operations:a.operations||null});
+}
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
 const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','commit_files','admin_get','admin_update',...QQ_ONLY]);
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
+function configDigest(c){return crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0,16);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
 function str(x,max=10000){if(typeof x!=='string'||x.length>max||x.includes('\0'))bad();return x;}
@@ -65,21 +77,26 @@ function classifyQueueErrors(list){
  if(/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text))return 'QUEUE_HEAD_MISMATCH';
  return 'QUEUE_REJECTED';
 }
-function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy}={}){
+function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,authorize=async()=>false,claimAuthorization=async()=>false,repositoryPolicy=initialPolicy,scopeConfig=()=>DEFAULT_CONFIG}={}){
  if(typeof credentials!=='function'||typeof fetcher!=='function')throw Error('DEPENDENCY_REQUIRED');
  async function run(input){
   let secrets=[],scopeDiagnostics;
   try{
    if(Buffer.byteLength(JSON.stringify(input??null),'utf8')>MAX_OPERATION_BYTES)bad('REQUEST_TOO_LARGE');
    exact(input,['account','repo','operation','args']);
-   if(typeof input.account!=='string'||!Object.hasOwn(ACCOUNTS,input.account))bad('ACCOUNT_REQUIRED');
-   const account=ACCOUNTS[input.account];const operation=input.operation;
+   let config;try{config=await scopeConfig();}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   const account=configuredAccount(input.account,config);if(!account)bad('ACCOUNT_REQUIRED');const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
-   if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
-   let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');
+   // Configured accounts: optional per-account operation allowlist, never admin or QQ-only.
+   if(account.configured&&(account.operations&&!account.operations.includes(operation)||!ACCOUNT_OPERATION_CEILING.includes(operation)))bad('OPERATION_NOT_ALLOWED_FOR_ACCOUNT');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
+   let policy;try{policy=validatePolicy(repositoryPolicy(config),config);}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   // The target must be in the configured list for this account, checked before any
+   // credential is read. Since 2026-11-15 the App installations may contain more
+   // repositories (owner granted "all repositories"); that never widens this list.
    const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
    // Repository restrictions supplement global account guards.
-   const restriction=repositoryRestriction(account.account,repo);
+   const restriction=repositoryRestriction(account.account,repo,config);
    if(restriction){
     if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
     if(restriction.commentOnly&&operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
@@ -151,7 +168,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const app=await api('/app',jwt);
    // Names may change during the controlled rollout. Identity never follows a
    // matching name alone: App ID, owner and installation remain pinned below.
-   if(Number(app?.id)!==account.app_id||!allowedAppSlug(account.account,app?.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
+   if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
    const installation=await api('/app/installations/'+account.installation_id,jwt);
    if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
    // PG's installed App has administration permission; ordinary execution never requests it.
@@ -161,8 +178,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const probeResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
    if(typeof probeResponse?.token!=='string'||!probeResponse.token)bad('INVALID_INSTALLATION_TOKEN');
    secrets.push(probeResponse.token);
-   // 2026-11-15: with "all repositories" the organisation listing can exceed one page; read it
-   // fully (bounded) so a partial listing is never mistaken for a missing repository.
+   // With "all repositories" the organisation listing can exceed one page; read it fully
+   // (bounded) so a partial listing is never mistaken for a missing repository.
    async function listInstallation(token){
     const repositories=[];let total=null;
     for(let page=1;page<=MAX_INSTALLATION_PAGES;page++){
@@ -185,11 +202,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      actualRepositoriesComplete:Array.isArray(observed?.repositories)&&names.length===list.length&&observed.total_count===list.length};
     bad(code);
    }
-   // 2026-11-15 (owner granted every App all repositories): the installation no longer has to
-   // equal the catalog. Repositories outside the catalog are ignored here and never reach a token;
-   // the target was already checked against the catalog before credentials (repoName).
-   // Still a mismatch: incomplete/malformed listing, entry not owned by the org, duplicate IDs,
-   // a catalog name present with a different ID, or a required catalog repository missing.
+   // 2026-11-15 (owner): the installation no longer has to equal the configured list.
+   // Repositories outside the list are ignored here and can never reach a token below.
+   // Still a mismatch: an incomplete/malformed listing, an entry not owned by the org,
+   // duplicate IDs, a configured name present with a different ID (rename/re-creation),
+   // or a required (non-optional) configured repository missing.
    function installedOptional(r,expected){
     if(!Array.isArray(r?.repositories)||r.total_count!==r.repositories.length)return null;
     const ids=new Set(),names=[];
@@ -198,14 +215,14 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      if(!Object.hasOwn(expected,x.name))continue;
      if(expected[x.name]!==x.id)return null;names.push(x.name);
     }
-    if(Object.keys(expected).some(n=>!OPTIONAL_REPOSITORIES.includes(n)&&!names.includes(n)))return null;
-    return names.filter(n=>OPTIONAL_REPOSITORIES.includes(n));
+    if(Object.keys(expected).some(n=>!config.optionalRepositories.includes(n)&&!names.includes(n)))return null;
+    return names.filter(n=>config.optionalRepositories.includes(n));
    }
    const optionalPresent=installedOptional(probe,scope.installation);
    if(optionalPresent===null)scopeMismatch('INSTALLATION_REPOSITORY_SCOPE_MISMATCH',probe,scope.installation);
    // Without the optional repository installed, other repositories keep working and the optional
    // one fails on its own before any execution token is minted.
-   const effectiveRepos=Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n])=>!OPTIONAL_REPOSITORIES.includes(n)||optionalPresent.includes(n))));
+   const effectiveRepos=Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n])=>!config.optionalRepositories.includes(n)||optionalPresent.includes(n))));
    if(!Object.hasOwn(effectiveRepos,repo))bad('REPOSITORY_NOT_INSTALLED');
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(effectiveRepos),permissions:permissions(account,operation)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
@@ -255,11 +272,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.filter(r=>Object.hasOwn(scope.installation,r.name)).map(r=>({id:r.id,full_name:r.full_name})),installationRepositorySelection:installation.repository_selection,installationRepositoryCount:probe.repositories.length,scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.filter(r=>Object.hasOwn(scope.installation,r.name)).map(r=>({id:r.id,full_name:r.full_name})),installationRepositorySelection:installation.repository_selection,installationRepositoryCount:probe.repositories.length,scopeRevision:policy.revision,scopeConfigDigest:configDigest(config),expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
  return {run};
 }
-module.exports={createClient,makeJwt,ACCOUNTS,APP_NAMES,allowedAppSlug,knownBotLogin,REPOSITORIES,OPERATION_NAMES,CoreError};
+module.exports={createClient,makeJwt,ACCOUNTS,configuredAccount,APP_NAMES,allowedAppSlug,knownBotLogin,REPOSITORIES,OPERATION_NAMES,CoreError};
