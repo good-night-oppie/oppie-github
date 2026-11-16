@@ -14,10 +14,11 @@ const INSTALL_IDS = { bb:'179806310', cindy:'179806330', deja:'179806356', dd:'1
 const MAX_PEM = 32768;
 const MAX_STORE = 1048576;
 function failure(code) { const e = new Error(code); e.code = code; return e; }
-// Accounts added in the owner's scope configuration (e.g. AD). The runtime installs a
-// resolver returning {name:{appId,installationId,appName}}; compiled accounts can never be
-// redefined. DPAPI entropy binds each key to its pinned App and installation IDs, so a later
-// change of those IDs in the configuration makes the stored key unreadable (fail closed).
+// Accounts added in the owner's settings page (e.g. AD). The runtime installs a resolver
+// returning {name:{appId,appName,appSlug}}; compiled accounts can never be redefined. DPAPI
+// entropy binds each key to the account and its pinned App ID; the installation is looked up on
+// GitHub on every call (owner 2026-11-16), so it is recorded as 'auto' and an installation change
+// does not invalidate the key. Changing the App ID makes the stored key unreadable (fail closed).
 let configuredAccounts=()=>({});
 function setAccountResolver(fn){if(typeof fn!=='function')throw failure('INVALID_RESOLVER');configuredAccounts=fn;}
 function configured(account){
@@ -35,7 +36,8 @@ function metadata(account) {
     return { account, appId:APP_IDS[account], installationId:INSTALL_IDS[account], appSlug:ACCOUNTS[account].app_slug,
       owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:account==='qq' };
   const c=configured(account);if(!c)throw failure('UNKNOWN_ACCOUNT');
-  return { account, appId:String(c.appId), installationId:String(c.installationId), appSlug:c.appSlug||c.appName.toLowerCase(),
+  // Settings-page accounts have no pinned installation: it is looked up on GitHub on every call.
+  return { account, appId:String(c.appId), installationId:'auto', appSlug:c.appSlug||c.appName.toLowerCase(),
     owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:false };
 }
 function entropy(account) { const m=metadata(account); return 'oppie-github/v1/'+m.account+'/'+m.appId+'/'+m.installationId; }
