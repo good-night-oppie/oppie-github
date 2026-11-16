@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+  <p class="muted" id="status">正在读取配置…</p>
+
+  <section>
+    <h3>伙伴账号</h3>
+    <p class="muted">每个伙伴能做什么、能用哪些仓库，都以 GitHub 上这个 App 的安装为准（权限和仓库）。要收窄就到 GitHub 上改 App 安装，插件下一次调用就跟着变。</p>
+    <table id="accounts"><thead><tr><th>账号</th><th>App</th><th>私钥</th><th></th></tr></thead><tbody></tbody></table>
+    <details id="account-form-box">
+      <summary>添加或修改伙伴账号</summary>
+      <div class="grid">
+        <label>账号名<input id="acc-name" placeholder="ad" autocomplete="off"></label>
+        <label>App 名称<input id="acc-app-name" placeholder="ADOppieXYZ" autocomplete="off"></label>
+        <label>App slug<input id="acc-slug" placeholder="默认为 App 名称小写" autocomplete="off"></label>
+        <label>App ID<input id="acc-app-id" inputmode="numeric" autocomplete="off"></label>
+      </div>
+      <button id="acc-apply" type="button">放入待保存</button>
+      <p class="muted">只填 App 身份。安装 ID、权限和仓库在导入私钥时从 GitHub 读取，显示在确认框上。内置的 12 个账号身份写在代码里，只能停用或启用。</p>
+    </details>
+  </section>
+
+  <section>
+    <p id="pending" class="muted"></p>
+    <button id="save" type="button" class="primary">保存（需要确认）</button>
+    <button id="reload" type="button">放弃修改并重新读取</button>
+  </section>
+
+  <section>
+    <h3>导入 App 私钥</h3>
+    <p class="muted">私钥直接交给 Cindy 保险库，只在导入这一步注入插件后台；后台先向 GitHub 核对 App，再用本机 DPAPI 加密保存。导入结束后保险库里的副本会被清除。不要把私钥发给任何人。</p>
+    <div class="grid">
+      <label>账号<select id="key-account"></select></label>
+      <label class="check"><input id="key-replace" type="checkbox">替换已保存的私钥</label>
+    </div>
+    <label>私钥（PEM）<textarea id="key-pem" rows="4" spellcheck="false" autocomplete="off" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></label>
+    <button id="key-import" type="button">核对并导入（需要确认）</button>
+    <p class="muted">导入前会先用这把私钥向 GitHub 读出 App 的安装、权限和仓库，显示在确认框上；确认后才保存。</p>
+  </section>
+
+  <p class="muted" id="message" role="status"></p>
+  <script src="/settings.js"></script>
+</body>
+</html>

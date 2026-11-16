@@ -1,6 +1,6 @@
 ---
 name: oppie-github-work
-description: Use a teammate's own Oppie GitHub App on its configured repositories; inspect identity and diagnose repository scope mismatches before performing GitHub work.
+description: Use a teammate's own Oppie GitHub App on the repositories its installation covers; inspect identity and diagnose installation, permission and repository scope failures before performing GitHub work.
 ---
 
 # Oppie GitHub work
@@ -9,33 +9,30 @@ Discover `ghost_info({ghost_id:"oppie-github",namespace:"local"})` and read `gho
 
 Select the account alias matching the acting teammate. The account parameter is a selection, not proof of caller identity or authorization. If the identity is unknown, clarify it; do not choose another teammate's account to make an operation succeed. Use `github_operations` to discover operation arguments and `github_accounts` to inspect account readiness without exposing credentials.
 
-## Repository configuration
+## What an account can do
 
-Since #22 the catalog has seven repositories: the original six plus the fork good-night-oppie/cindy. Since 1.5.0-preview.8-seven-roles.2 (2026-11-15, P0) the Apps may have access to all repositories: repository_selection 'all' is accepted, installed repositories outside the catalog are ignored, the target must be in the catalog (otherwise REPOSITORY_NOT_ALLOWED, not executed) and execution tokens stay narrowed to catalog repositories. Installations must contain the six original repositories and may contain cindy (optional during rollout; absent cindy gives REPOSITORY_NOT_INSTALLED for cindy only). Per user authorization of 2026-11-14 (1.5.0-preview.8-seven-roles.1), all twelve accounts, including ReviewInbox, execute on all seven repositories. DD and QQ now inherit their original-six-repository operation boundaries on cindy. Global account allowlists, authoring restrictions and authorization checks remain in force; this does not add new administration grants to PG, Deja or other accounts. ReviewInbox has ordinary contents/issues/pull_requests write permissions and supports COMMENT, APPROVE and REQUEST_CHANGES reviews on all seven repositories; normal review-head checks still apply. The automatic review queue is configured separately (MontClip and MontClip-Cindy) and is not enabled by this scope. PG may have additional installation permissions, but ordinary execution tokens still contain only contents/write, issues/write, pull_requests/write and metadata/read. Installation grants do not permit management operations through this plugin. Confirm the installed version with identity before relying on these defaults.
+Since 1.5.0-preview.10-settings.7 (owner decision 2026-11-16) what an account can do and which repositories it can use follow its GitHub App installation in good-night-oppie. The plugin keeps no roles, operation allowlists, repository list or QQ-only limits. The owner has given every App all-repository access; to narrow an account the owner changes its App installation on GitHub, and the next call follows it. Confirm the installed version with identity before relying on this.
 
-The settings-write UI is deferred. This release uses reviewed code configuration; there is no supported hot-save tool or page.
+Accounts are enabled and new teammate Apps (such as AD) are added in the plugin's settings page with identity only (App name, slug, App ID); installation, permissions and repositories are read from GitHub when the owner imports the key, on a host confirmation card. Never ask anyone for an App private key; only the owner enters it in the settings page. Do not write configuration through private files or undocumented endpoints.
 
-Use the current account configuration, when exposed by the installed plugin, rather than any hard-coded repository list; the compiled default is seven repositories for every account. Distinguish:
+Each call gets its own token for the target repository only, with exactly the permissions that operation needs. Default branches are never written and force pushes are never made. Ruleset changes still need the owner's written authorization comment and a host confirmation each time.
 
-- Installation repositories: the catalog repositories found on the GitHub App installation (other installed repositories are ignored).
-- Execution repositories: the repositories this account may target through the plugin.
-- Operation permissions: the account's existing role restrictions, which are not changed by adding a repository.
-
-The repository catalog is not a grant of access to every account. Never copy a discovered installation list into the allowed configuration automatically. Configuration changes require an explicit user request covering the affected account and repository scope. Do not write configuration through private files or undocumented endpoints.
-
-When the installed version supports configuration readback, record the effective account, repository sets and revision. After an authorized save, read back the effective configuration and make a fresh read-only identity call. Do not report that a saved setting has taken effect solely because the page displayed success. If the required interface is absent, report the installed version and missing capability; do not invent a tool or use another identity.
+GitHub permissions are not the whole rule: team rules (SOP) on who comments, reviews, approves or merges still apply even when the installation would allow more.
 
 ## Identity and execution
 
 Before the first write, call the plugin's `github` tool with the selected account, target repository and `operation:"identity"`. Require the inner result to succeed. An outer `ok:true` only confirms that the plugin call completed. `execution:"not_executed"` means the requested GitHub operation did not run.
 
-Retain the receipt's App slug, installation ID, repository, object URL and configuration revision when available. Check the target and operation against the user's request and the account's role. Available GitHub permissions do not override teammate restrictions on commenting, reviewing, approving or merging.
+Retain the receipt's App slug, installation ID, repository, object URL and configuration revision when available. Check the target and operation against the user's request and the team's rules. Available GitHub permissions do not override teammate restrictions on commenting, reviewing, approving or merging.
 
-## Scope failures
+## Installation and scope failures
 
-For `INSTALLATION_REPOSITORY_SCOPE_MISMATCH`, compare expected and actual installation repositories in the diagnostic receipt. For `EXECUTION_REPOSITORY_SCOPE_MISMATCH`, compare the execution token's repositories with the expected execution scope. For the older `REPOSITORY_SCOPE_MISMATCH`, report that the failure stage is unknown unless other evidence identifies it. Preserve any completeness indicator: a partial list cannot establish the full difference.
+- `INSTALLATION_PERMISSION_MISSING`: the App installation lacks a level the operation needs. `details.missing` and `details.fix` name it and the two links show where the owner adds it. Report that to the owner; do not switch accounts to get around it. With `details.workflowFiles` the change touches `.github/workflows/` and the App needs `workflows:write`.
+- `REPOSITORY_NOT_INSTALLED`: the target repository is not in the App installation. Only the owner can add it on GitHub.
+- `INSTALLATION_NOT_FOUND`: a settings-page account's App has no single installation in good-night-oppie.
+- `TOKEN_PERMISSION_MISMATCH` or `EXECUTION_REPOSITORY_SCOPE_MISMATCH`: GitHub returned a token that differs from the request (permissions or repositories). Nothing ran; report the diagnostics.
 
-Report repository names and the difference, never tokens or private keys. Do not weaken the catalog or execution-token checks, change App installation settings, retry a write, or switch to a shared login merely to clear the error. After an authorized correction, verify identity again before resuming the original operation. Check for an existing result before retrying any write whose outcome is unknown.
+Report repository names and the difference, never tokens or private keys. Do not change App installation settings, retry a write, or switch to a shared login merely to clear the error. After an authorized correction, verify identity again before resuming the original operation. Check for an existing result before retrying any write whose outcome is unknown.
 
 For automatic review work, follow the installed manual's queue claim/finish protocol and COMMENT-only restrictions. Resolve author notifications from verified current task ownership; never guess a partner from a bot login or signature.
 

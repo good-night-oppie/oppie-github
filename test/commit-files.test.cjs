@@ -7,12 +7,12 @@ const crypto=require('node:crypto');
 const fs=require('node:fs');
 const path=require('node:path');
 const {createClient,ACCOUNTS}=require('../node/core.cjs');
-const {CATALOG}=require('../node/repository-policy.cjs');
 const {gitBlobSha}=require('../node/commit-files.cjs');
 const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=1800000000000;
-const repos={total_count:Object.keys(CATALOG).length,repositories:Object.entries(CATALOG).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))};
+const INSTALLED=['MontClip','MontClip-Cindy','oppie-github','cindy'];
+const listed=names=>({total_count:names.length,repositories:names.map(name=>({id:1000+INSTALLED.indexOf(name),name,full_name:'good-night-oppie/'+name}))});
 const ROOT='/repos/good-night-oppie/MontClip';
 const MSG='Change files\n\nAssisted-by: Cindy (https://cindy.app)';
 const fakeSha=x=>crypto.createHash('sha1').update(JSON.stringify(x)).digest('hex');
@@ -50,7 +50,7 @@ function seed(){
 function fixture(options={}){
  const {git,head}=options.seeded||seed();
  const account=ACCOUNTS[options.account||'deja'];
- const perms={contents:account.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read'};
+ const perms=options.perms||{contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
  const calls=[];let counter=0;const tokenRepositories=new Map();
  const reply=(data,status=200)=>({ok:status>=200&&status<300,status,text:async()=>JSON.stringify(data)});
  const fetch=async(url,init)=>{
@@ -58,10 +58,10 @@ function fixture(options={}){
   calls.push({path:p,method:init.method,body,signal:init.signal});
   if(options.override){const out=await options.override(p,init,body,git);if(out){if(out.throw)throw Error('network');return reply(out.data,out.status);}}
   if(p==='/app')return reply({id:account.app_id,slug:account.app_slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/x'});
-  if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:{...perms,...(account.admin?{administration:'write'}:{})}});
-  if(p.endsWith('/access_tokens')){const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:{...perms,...(account.admin?{administration:'write'}:{})}};const ids=body.repository_ids;tokenRepositories.set('Bearer '+t.token,ids?{total_count:ids.length,repositories:repos.repositories.filter(r=>ids.includes(r.id))}:repos);return reply(t);}
+  if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:perms});
+  if(p.endsWith('/access_tokens')){const names=body.repository_ids?body.repository_ids.map(id=>INSTALLED[id-1000]):body.repositories;const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:body.permissions};tokenRepositories.set('Bearer '+t.token,listed(names||INSTALLED));return reply(t);}
   if(p==='/installation/repositories')return reply(tokenRepositories.get(init.headers.Authorization));
-  if(p===ROOT)return reply({default_branch:'main'});
+  if(p===ROOT)return reply({id:1000+INSTALLED.indexOf('MontClip'),name:'MontClip',full_name:'good-night-oppie/MontClip',owner:{login:'good-night-oppie'},default_branch:'main'});
   if(p.startsWith(ROOT+'/git/ref/heads/')){const b=p.slice((ROOT+'/git/ref/heads/').length);return git.refs.has(b)?reply({ref:'refs/heads/'+b,object:{type:'commit',sha:git.refs.get(b)}}):reply({message:'Not Found'},404);}
   if(p.startsWith(ROOT+'/git/commits/')){const c=git.commits.get(p.split('/').pop());return c?reply(c):reply({},404);}
   if(p.startsWith(ROOT+'/git/trees/')&&init.method==='GET'){const sha=p.split('/').pop(),t=git.trees.get(sha);return t?reply({sha,tree:t,truncated:false}):reply({},404);}
@@ -273,12 +273,13 @@ test('an uncertain ref update is read back once and never retried',async()=>{
  assert.equal(c.ok,false);assert.equal(c.execution,'unknown');assert.equal(dark.calls.filter(x=>x.method==='PATCH').length,1);
 });
 
-test('QQ cannot author commits; all other teammates including ReviewInbox can',async()=>{
+// Owner 2026-11-16: no plugin-side roles; the installation decides (all twelve have contents:write here).
+test('every teammate whose installation has contents:write can commit, with a single-repository contents:write token',async()=>{
  for(const account of Object.keys(ACCOUNTS)){
   const f=fixture({account});
   const r=await run(f,base(f,{changes:[{path:'a',content_base64:b64('a')}]}),account);
-  if(account==='qq'){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
-  else assert.equal(r.ok,true,account+JSON.stringify(r));
+  assert.equal(r.ok,true,account+JSON.stringify(r));
+  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.body),[{repositories:['MontClip'],permissions:{metadata:'read'}},{repository_ids:[1000],permissions:{metadata:'read',contents:'write'}}],account);
  }
 });
 
@@ -287,4 +288,33 @@ test('commit_files is advertised and treated as a write by the host bridge',()=>
  assert.match(operations.commit_files,/expected_head/);
  const main=fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8');
  assert.equal(/READ_ONLY_OPERATIONS=new Set\([^)]*commit_files/.test(main),false);
+});
+
+// Deja 2026-11-16 (#33): files under .github/workflows/ need workflows:write on the token. The
+// token asks for it only when the change touches such a path and the installation holds it.
+const WF_PERMS={contents:'write',issues:'write',pull_requests:'write',metadata:'read',workflows:'write'};
+const tokenRequests=f=>f.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.body?.repository_ids).map(c=>c.body.permissions);
+test('commit_files touching .github/workflows/ requests workflows:write when the installation has it',async()=>{
+ const f=fixture({perms:WF_PERMS});
+ const r=await run(f,base(f,{changes:[{path:'.github/workflows/test.yml',content_base64:b64('on: [merge_group]')},{path:'README.md',content_base64:b64('x')}]}));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(tokenRequests(f),[{metadata:'read',contents:'write',workflows:'write'}]);
+});
+test('commit_files touching .github/workflows/ without the workflows permission fails in plain words before any write',async()=>{
+ for(const change of [{path:'.github/workflows/test.yml',content_base64:b64('x')},{path:'.github/workflows/old.yml',delete:true},{path:'ci/test.yml',from:'.github/workflows/test.yml'}]){
+  const f=fixture();
+  const r=await run(f,base(f,{changes:[change]}));
+  assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(r.execution,'not_executed');
+  assert.deepEqual(r.details.missing,[{permission:'workflows',required:'write',installed:'none'}]);
+  assert.deepEqual(r.details.workflowFiles,[change.from||change.path]);
+  assert.equal(tokenRequests(f).length,0);assert.equal(f.writes().length,0);
+  const said=require('../node/messages.cjs').explain(r).message;
+  assert.match(said,/workflows:write/);assert.ok(said.includes('.github/workflows/'));assert.ok(said.includes('/settings/apps/')&&said.includes('/permissions'));
+ }
+});
+test('commit_files outside .github/workflows/ never asks for workflows, even when the installation has it',async()=>{
+ const f=fixture({perms:WF_PERMS});
+ const r=await run(f,base(f,{changes:[{path:'docs/github/workflows.md',content_base64:b64('x')},{path:'github/workflows/a.yml',content_base64:b64('x')}]}));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(tokenRequests(f),[{metadata:'read',contents:'write'}]);
 });

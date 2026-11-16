@@ -14,10 +14,33 @@ const INSTALL_IDS = { bb:'179806310', cindy:'179806330', deja:'179806356', dd:'1
 const MAX_PEM = 32768;
 const MAX_STORE = 1048576;
 function failure(code) { const e = new Error(code); e.code = code; return e; }
+// Accounts added in the owner's settings page (e.g. AD). The runtime installs a resolver
+// returning {name:{appId,appName,appSlug}}; compiled accounts can never be redefined. DPAPI
+// entropy binds each key to the account and its pinned App ID; the installation is looked up on
+// GitHub on every call (owner 2026-11-16), so it is recorded as 'auto' and an installation change
+// does not invalidate the key. Changing the App ID makes the stored key unreadable (fail closed).
+// Keys imported by settings.2-6 were bound to the installation ID then written in the configuration;
+// that ID stays in the configuration for those accounts so their keys remain readable after upgrade.
+let configuredAccounts=()=>({});
+function setAccountResolver(fn){if(typeof fn!=='function')throw failure('INVALID_RESOLVER');configuredAccounts=fn;}
+function configured(account){
+  if(typeof account!=='string'||Object.hasOwn(APP_IDS,account))return null;
+  let all;try{all=configuredAccounts();}catch(_){return null;}
+  return all&&Object.hasOwn(all,account)?all[account]:null;
+}
+function knownAccount(account){return typeof account==='string'&&(Object.hasOwn(APP_IDS,account)||!!configured(account));}
+function slugAllowed(account,slug){
+  if(Object.hasOwn(APP_IDS,account))return allowedAppSlug(account,slug);
+  const c=configured(account);return !!c&&typeof slug==='string'&&['oppie-agent-'+account,c.appSlug||c.appName.toLowerCase()].includes(slug);
+}
 function metadata(account) {
-  if (typeof account !== 'string' || !Object.hasOwn(APP_IDS, account)) throw failure('UNKNOWN_ACCOUNT');
-  return { account, appId:APP_IDS[account], installationId:INSTALL_IDS[account], appSlug:ACCOUNTS[account].app_slug,
-    owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:account==='qq' };
+  if (typeof account === 'string' && Object.hasOwn(APP_IDS, account))
+    return { account, appId:APP_IDS[account], installationId:INSTALL_IDS[account], appSlug:ACCOUNTS[account].app_slug,
+      owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:account==='qq' };
+  const c=configured(account);if(!c)throw failure('UNKNOWN_ACCOUNT');
+  // Settings-page accounts have no pinned installation: it is looked up on GitHub on every call.
+  return { account, appId:String(c.appId), installationId:c.installationId?String(c.installationId):'auto', appSlug:c.appSlug||c.appName.toLowerCase(),
+    owner:'good-night-oppie', repositoryIds:[1441621868,1446532339], admin:false };
 }
 function entropy(account) { const m=metadata(account); return 'oppie-github/v1/'+m.account+'/'+m.appId+'/'+m.installationId; }
 
@@ -114,10 +137,11 @@ function createStore(options={}) {
     try { await checkAcl(root); }catch(_){throw failure('UNSAFE_STORE_ACL');}
     return true;
   }
+  function shapeOnly(row){if(typeof row?.account!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(row.account)||!/^[a-f0-9]{64}$/.test(row.fingerprint)||typeof row.ciphertext!=='string')throw failure('INVALID_STORE');}
   function validateRow(row) {
     const fixed=metadata(row?.account);
     for(const k of Object.keys(fixed)){
-      if(k==='appSlug'){if(!allowedAppSlug(fixed.account,row[k]))throw failure('INVALID_STORE');}
+      if(k==='appSlug'){if(!slugAllowed(fixed.account,row[k]))throw failure('INVALID_STORE');}
       else if(JSON.stringify(row[k])!==JSON.stringify(fixed[k]))throw failure('INVALID_STORE');
     }
     if(!/^[a-f0-9]{64}$/.test(row.fingerprint)||typeof row.ciphertext!=='string'||row.ciphertext.length>100000||!/^[A-Za-z0-9+/]+={0,2}$/.test(row.ciphertext))throw failure('INVALID_STORE');
@@ -130,14 +154,23 @@ function createStore(options={}) {
     try {
       await checkAcl(file);bytes=await plainFile(file,MAX_STORE);
       const doc=JSON.parse(bytes.toString('utf8'));
-      if(doc.version!==1||!Array.isArray(doc.accounts)||doc.accounts.length>12)throw Error();
-      const seen=new Set();for(const row of doc.accounts){validateRow(row);if(seen.has(row.account))throw Error();seen.add(row.account);}
+      if(doc.version!==1||!Array.isArray(doc.accounts)||doc.accounts.length>64)throw Error();
+      // Rows of accounts no longer in the configuration are kept on disk but never used.
+      // A settings-page account whose App identity changed since its key was imported is "stale":
+      // only that account needs a new key; the other accounts keep working (QQ on #34: one
+      // mismatch must not stop everyone). A compiled account's row must match exactly.
+      const seen=new Set(),stale=new Set();for(const row of doc.accounts){
+        if(knownAccount(row?.account)&&Object.hasOwn(APP_IDS,row.account))validateRow(row);
+        else if(knownAccount(row?.account)){try{validateRow(row);}catch(_){shapeOnly(row);stale.add(row.account);}}
+        else if(typeof row?.account!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(row.account)||!/^[a-f0-9]{64}$/.test(row.fingerprint)||typeof row.ciphertext!=='string')throw Error();
+        if(seen.has(row.account))throw Error();seen.add(row.account);}
+      Object.defineProperty(doc,'stale',{value:stale,enumerable:false});
       return doc;
     }catch(_){throw failure('INVALID_OR_UNSAFE_STORE');}finally{bytes?.fill(0);}
   }
   // A stored slug is historical metadata, not proof of a current GitHub name.
   // Do not rewrite ciphertext or alter entropy merely because registration renamed.
-  function publicRow(row){const {ciphertext,...visible}=row;return {...visible,expectedAppSlug:ACCOUNTS[row.account].app_slug,appSlugStatus:'stored_not_live'};}
+  function publicRow(row){const {ciphertext,...visible}=row;return {...visible,expectedAppSlug:metadata(row.account).appSlug,appSlugStatus:'stored_not_live'};}
   async function save(doc) {
     await ensureRoot(true);
     const temporary=path.join(root,'.accounts-'+crypto.randomBytes(12).toString('hex')+'.tmp');
@@ -152,21 +185,23 @@ function createStore(options={}) {
     }catch(_){throw failure('STORE_WRITE_FAILED');}
     finally { await handle?.close().catch(()=>{});await fs.unlink(temporary).catch(()=>{}); }
   }
+  // Settings page import: the PEM arrives as a host-injected secret, never through a file or RPC param.
+  async function importKeyText(args) { return importKey({...args,pem_text:args?.pem_text}); }
   async function importKey(args) { return serial(async()=>{
     const fixed=metadata(args?.account);
     if(args.expected_fingerprint!==undefined&&!/^[a-f0-9]{64}$/.test(args.expected_fingerprint))throw failure('INVALID_EXPECTED_FINGERPRINT');
-    const supplied=args.pem_path||args.pemPath;
-    if(typeof supplied!=='string'||!path.isAbsolute(supplied)||path.extname(supplied).toLowerCase()!=='.pem')throw failure('INVALID_PEM_PATH');
+    const supplied=args.pem_path||args.pemPath;const fromText=typeof args.pem_text==='string';
+    if(fromText?(supplied!==undefined||args.pem_text.length>MAX_PEM):(typeof supplied!=='string'||!path.isAbsolute(supplied)||path.extname(supplied).toLowerCase()!=='.pem'))throw failure('INVALID_PEM_PATH');
     if(args.metadata)for(const [k,v] of Object.entries(args.metadata)){
-      if(k==='appSlug'){if(!allowedAppSlug(fixed.account,v))throw failure('ACCOUNT_METADATA_MISMATCH');}
+      if(k==='appSlug'){if(!slugAllowed(fixed.account,v))throw failure('ACCOUNT_METADATA_MISMATCH');}
       else if(JSON.stringify(fixed[k])!==JSON.stringify(v))throw failure('ACCOUNT_METADATA_MISMATCH');
     }
     const doc=await read();
     const previous=doc.accounts.find(x=>x.account===fixed.account);
-    if(previous&&!args.replace)throw failure('ACCOUNT_EXISTS');
+    if(previous&&!args.replace&&!doc.stale.has(fixed.account))throw failure('ACCOUNT_EXISTS');
     let bytes;
     try {
-      bytes=await plainFile(supplied,MAX_PEM);
+      bytes=fromText?Buffer.from(args.pem_text,'utf8'):await plainFile(supplied,MAX_PEM);
       const key=crypto.createPrivateKey(bytes);
       if(key.asymmetricKeyType!=='rsa'||key.asymmetricKeyDetails.modulusLength<2048)throw failure('INVALID_RSA_KEY');
       const pub=crypto.createPublicKey(key).export({type:'spki',format:'der'});
@@ -183,7 +218,7 @@ function createStore(options={}) {
   }); }
   async function load(account) {
     metadata(account);await queue;const doc=await read();const row=doc.accounts.find(x=>x.account===account);
-    if(!row)throw failure('ACCOUNT_NOT_CONNECTED');let plain;
+    if(!row)throw failure('ACCOUNT_NOT_CONNECTED');if(doc.stale.has(account))throw failure('KEY_IMPORTED_FOR_OTHER_APP');let plain;
     try {
       plain=await unprotect(Buffer.from(row.ciphertext,'base64'),entropy(account));
       const key=crypto.createPrivateKey(plain);
@@ -193,8 +228,49 @@ function createStore(options={}) {
       return {...publicRow(row),privateKey:Buffer.from(plain).toString('utf8')};
     }catch(e){if(e.code==='SECURE_STORAGE_UNAVAILABLE')throw e;throw failure('KEY_UNAVAILABLE');}finally{plain?.fill(0);}
   }
-  async function list(){await queue;return (await read()).accounts.map(publicRow);}
-  return {importKey,load,list,paths:{root,file},backendName:linux?linux.backendName:'Windows DPAPI CurrentUser'};
+  async function list(){await queue;const doc=await read();return doc.accounts.filter(r=>knownAccount(r.account)&&!doc.stale.has(r.account)).map(publicRow);}
+  // Owner-only private files beside the key store (scope configuration and its audit log).
+  // Same root, ACL and atomic-replace discipline as accounts.json.
+  const PRIVATE_NAMES=['scope-config.json','scope-config-audit.jsonl','scope-config.key'];
+  async function readPrivate(name){
+    if(!PRIVATE_NAMES.includes(name))throw failure('INVALID_PRIVATE_FILE');
+    if(!await ensureRoot())return null;const target=path.join(root,name);
+    try{await fs.lstat(target);}catch(e){if(e.code==='ENOENT')return null;throw failure('INVALID_PRIVATE_FILE');}
+    await checkAcl(target);return (await plainFile(target,MAX_STORE)).toString('utf8');
+  }
+  async function writePrivate(name,text){ return serial(async()=>{
+    if(!PRIVATE_NAMES.includes(name)||typeof text!=='string'||Buffer.byteLength(text)>MAX_STORE)throw failure('INVALID_PRIVATE_FILE');
+    await ensureRoot(true);const target=path.join(root,name);
+    const temporary=path.join(root,'.private-'+crypto.randomBytes(12).toString('hex')+'.tmp');let handle;
+    try{
+      handle=await fs.open(temporary,'wx',0o600);await handle.close();handle=null;
+      await tighten(temporary,false);await checkAcl(root);
+      handle=await fs.open(temporary,'r+');await handle.writeFile(text);await handle.sync();await handle.close();handle=null;
+      try{await fs.lstat(target);await checkAcl(target);await plainFile(target,MAX_STORE);}catch(e){if(e.code!=='ENOENT')throw e;}
+      await fs.rename(temporary,target);await checkAcl(target);
+    }catch(_){throw failure('STORE_WRITE_FAILED');}
+    finally{await handle?.close().catch(()=>{});await fs.unlink(temporary).catch(()=>{});}
+  }); }
+  // Scope-configuration signing state (QQ review of the settings page, 2026-11-16): a random
+  // HMAC key and the last saved revision, sealed together with DPAPI (Linux: Secret Service).
+  // Editing scope-config.json by hand cannot produce a valid signature without unsealing this.
+  const SCOPE_KEY_FILE='scope-config.key',SCOPE_KEY_CONTEXT='oppie-github/v1/scope-config';
+  async function readScopeKey(){
+    const text=await readPrivate(SCOPE_KEY_FILE);if(text===null)return null;
+    let sealed;try{const doc=JSON.parse(text);if(doc.v!==1||typeof doc.sealed!=='string'||!/^[A-Za-z0-9+/]+={0,2}$/.test(doc.sealed))throw Error();sealed=Buffer.from(doc.sealed,'base64');}catch(_){throw failure('INVALID_SCOPE_KEY');}
+    let plain;try{
+      plain=await unprotect(sealed,SCOPE_KEY_CONTEXT);const state=JSON.parse(Buffer.from(plain).toString('utf8'));
+      if(typeof state.key!=='string'||!/^[a-f0-9]{64}$/.test(state.key)||!Number.isSafeInteger(state.revision)||state.revision<0)throw Error();
+      return {key:Buffer.from(state.key,'hex'),revision:state.revision};
+    }catch(e){if(e.code==='SECURE_STORAGE_UNAVAILABLE')throw e;throw failure('INVALID_SCOPE_KEY');}finally{plain?.fill?.(0);}
+  }
+  async function writeScopeKey({key,revision}){
+    if(!Buffer.isBuffer(key)||key.length!==32||!Number.isSafeInteger(revision)||revision<0)throw failure('INVALID_SCOPE_KEY');
+    const plain=Buffer.from(JSON.stringify({key:key.toString('hex'),revision}),'utf8');
+    try{const sealed=await protect(plain,SCOPE_KEY_CONTEXT);await writePrivate(SCOPE_KEY_FILE,JSON.stringify({v:1,sealed:Buffer.from(sealed).toString('base64')}));}
+    finally{plain.fill(0);}
+  }
+  return {importKey,importKeyText,load,list,readPrivate,writePrivate,readScopeKey,writeScopeKey,paths:{root,file},backendName:linux?linux.backendName:'Windows DPAPI CurrentUser'};
 }
 const defaultStore=createStore();
-module.exports={...defaultStore,createStore,metadata,APP_IDS,INSTALL_IDS,tightenNew,verifyWindowsAcl};
+module.exports={...defaultStore,createStore,metadata,setAccountResolver,APP_IDS,INSTALL_IDS,tightenNew,verifyWindowsAcl};

@@ -274,71 +274,76 @@ var require_commit_files = __commonJS({
   }
 });
 
-// node/repository-policy.cjs
-var require_repository_policy = __commonJS({
-  "node/repository-policy.cjs"(exports2, module2) {
+// node/scope-config.cjs
+var require_scope_config = __commonJS({
+  "node/scope-config.cjs"(exports2, module2) {
     "use strict";
-    var SIX = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
-    var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
-    var OPTIONAL_REPOSITORIES = Object.freeze(["cindy"]);
-    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
-    var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "write", qq: "write" });
-    var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
-    var REVIEW_OPERATIONS = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]);
-    function repositoryRestriction(account, repo) {
-      if (repo !== "cindy" || !Object.hasOwn(CINDY_ROLES, account) || CINDY_ROLES[account] === "write") return null;
-      return Object.freeze({ operations: REVIEW_OPERATIONS, commentOnly: CINDY_ROLES[account] === "comment_review" });
-    }
-    function invalid() {
+    var OWNER = "good-night-oppie";
+    var BUILTIN_ACCOUNTS = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
+    var DEFAULTS = Object.freeze({ accounts: BUILTIN_ACCOUNTS, newAccounts: Object.freeze({}) });
+    var KEYS = Object.freeze(["schemaVersion", "revision", "accounts", "newAccounts"]);
+    var LEGACY_KEYS = Object.freeze(["repositories", "optionalRepositories", "twoRepositories", "repositoryRoles", "reviewOperations"]);
+    var LEGACY_ACCOUNT_KEYS = Object.freeze(["role", "operations"]);
+    var ACCOUNT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+    var APP_NAME = /^[A-Za-z0-9-]{1,34}$/;
+    var APP_SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
+    var BUILTIN_APP_IDS = Object.freeze([5665927, 5665939, 5665940, 5665941, 5665942, 5665943, 5665944, 5665946, 5665948, 5665949, 5665951, 5687106]);
+    var MAX_FILE_BYTES = 65536;
+    function invalid(reason) {
       const e = new Error("INVALID_SCOPE_CONFIGURATION");
       e.code = "INVALID_SCOPE_CONFIGURATION";
+      e.reason = reason;
       throw e;
     }
-    function record(value, keys) {
-      if (!value || typeof value !== "object" || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
-      const own = Reflect.ownKeys(value);
-      if (own.length !== keys.length || own.some((k) => typeof k !== "string" || !keys.includes(k) || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k), "value"))) invalid();
+    function plain(x) {
+      return !!x && typeof x === "object" && !Array.isArray(x) && [Object.prototype, null].includes(Object.getPrototypeOf(x));
     }
-    function repoMap(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
-      const names = Object.keys(value);
-      if (!names.length || names.length > Object.keys(CATALOG).length) invalid();
-      record(value, names);
-      const selected = {};
-      for (const name of Object.keys(CATALOG)) if (Object.hasOwn(value, name)) {
-        if (value[name] !== CATALOG[name]) invalid();
-        selected[name] = CATALOG[name];
+    function id(x, what) {
+      if (!Number.isSafeInteger(x) || x < 1) invalid(what);
+      return x;
+    }
+    function names(list, what, pattern = ACCOUNT_NAME, max = 200) {
+      if (!Array.isArray(list) || list.length > max) invalid(what);
+      for (const n of list) if (typeof n !== "string" || !pattern.test(n) || n === "." || n === "..") invalid(what);
+      if (new Set(list).size !== list.length) invalid(what + " duplicate");
+      return Object.freeze([...list]);
+    }
+    function validateConfig(raw, { legacy = false, keep = {} } = {}) {
+      if (raw === void 0 || raw === null) raw = {};
+      if (!plain(raw)) invalid("root");
+      for (const k of Object.keys(raw)) if (!KEYS.includes(k) && !(legacy && LEGACY_KEYS.includes(k))) invalid("unknown key " + k);
+      if (raw.schemaVersion !== void 0 && raw.schemaVersion !== 1) invalid("schemaVersion");
+      const revision = raw.revision === void 0 ? 0 : raw.revision;
+      if (!Number.isSafeInteger(revision) || revision < 0) invalid("revision");
+      const newAccounts = {};
+      if (raw.newAccounts !== void 0) {
+        if (!plain(raw.newAccounts) || Object.keys(raw.newAccounts).length > 50) invalid("newAccounts");
+        const seenApps = /* @__PURE__ */ new Set();
+        for (const [name, a] of Object.entries(raw.newAccounts)) {
+          if (!ACCOUNT_NAME.test(name) || BUILTIN_ACCOUNTS.includes(name)) invalid("newAccounts name " + name);
+          if (!plain(a) || Object.keys(a).some((k) => !["appId", "appName", "appSlug", "installationId", ...legacy ? LEGACY_ACCOUNT_KEYS : []].includes(k))) invalid("newAccounts " + name);
+          id(a.appId, "appId");
+          if (a.installationId !== void 0) {
+            id(a.installationId, "installationId");
+            const k = Object.hasOwn(keep, name) ? keep[name] : null;
+            if (!legacy && !(k && k.appId === a.appId && k.installationId === a.installationId)) invalid("newAccounts " + name + " installationId");
+          }
+          if (BUILTIN_APP_IDS.includes(a.appId)) invalid("newAccounts " + name + " reuses a compiled App");
+          if (typeof a.appName !== "string" || !APP_NAME.test(a.appName)) invalid("appName");
+          const appSlug = a.appSlug === void 0 ? a.appName.toLowerCase() : a.appSlug;
+          if (typeof appSlug !== "string" || !APP_SLUG.test(appSlug)) invalid("appSlug");
+          if (seenApps.has(a.appId)) invalid("newAccounts duplicate App ID");
+          seenApps.add(a.appId);
+          newAccounts[name] = Object.freeze({ appId: a.appId, appName: a.appName, appSlug, ...a.installationId !== void 0 ? { installationId: a.installationId } : {} });
+        }
       }
-      if (Object.keys(selected).length !== names.length) invalid();
-      return Object.freeze(selected);
+      const known = [...BUILTIN_ACCOUNTS, ...Object.keys(newAccounts)];
+      const accounts = raw.accounts === void 0 ? Object.freeze([...DEFAULTS.accounts, ...Object.keys(newAccounts)]) : names(raw.accounts, "accounts", ACCOUNT_NAME, 64);
+      if (!accounts.length || accounts.some((a) => !known.includes(a))) invalid("accounts must be built-in or listed in newAccounts");
+      return Object.freeze({ schemaVersion: 1, revision, accounts, newAccounts: Object.freeze(newAccounts) });
     }
-    function baseline(account) {
-      return { installation: CATALOG, execution: CATALOG };
-    }
-    function sameMap(a, b) {
-      return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
-    }
-    function validatePolicy(value) {
-      record(value, ["schemaVersion", "revision", "accounts"]);
-      if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) invalid();
-      record(value.accounts, ACCOUNT_NAMES);
-      const accounts = {};
-      for (const account of ACCOUNT_NAMES) {
-        const source = value.accounts[account];
-        record(source, ["installation", "execution"]);
-        const installation = repoMap(source.installation), execution = repoMap(source.execution);
-        if (!Object.keys(execution).every((k) => installation[k] === execution[k])) invalid();
-        const original = baseline(account);
-        if (account !== "deja" && (!sameMap(installation, original.installation) || !sameMap(execution, original.execution))) invalid();
-        accounts[account] = Object.freeze({ installation, execution });
-      }
-      return Object.freeze({ schemaVersion: 1, revision: value.revision, accounts: Object.freeze(accounts) });
-    }
-    function initialPolicy() {
-      return validatePolicy({ schemaVersion: 1, revision: 0, accounts: Object.fromEntries(ACCOUNT_NAMES.map((a) => [a, baseline(a)])) });
-    }
-    module2.exports = { CATALOG, SIX, TWO, OPTIONAL_REPOSITORIES, CINDY_ROLES, CINDY_EXECUTION, REVIEW_OPERATIONS, repositoryRestriction, ACCOUNT_NAMES, initialPolicy, validatePolicy };
+    var DEFAULT_CONFIG = validateConfig({});
+    module2.exports = { OWNER, DEFAULTS, DEFAULT_CONFIG, BUILTIN_ACCOUNTS, BUILTIN_APP_IDS, MAX_FILE_BYTES, validateConfig };
   }
 });
 
@@ -353,10 +358,8 @@ var require_core = __commonJS({
     var MAX_OPERATION_BYTES = 261120;
     var MAX_INSTALLATION_PAGES = 10;
     var OWNER = "good-night-oppie";
-    var { initialPolicy, validatePolicy, repositoryRestriction, OPTIONAL_REPOSITORIES } = require_repository_policy();
+    var { DEFAULT_CONFIG } = require_scope_config();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
-    var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
     var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
@@ -378,16 +381,51 @@ var require_core = __commonJS({
       app_name: APP_NAMES[account],
       app_slug: APP_NAMES[account].toLowerCase(),
       app_slug_status: "expected_not_live",
-      allowed_slugs: Object.freeze(account === "reviewinbox" ? ["reviewinboxoppiexyz"] : ["oppie-agent-" + account, APP_NAMES[account].toLowerCase()]),
-      admin: account === "qq"
+      allowed_slugs: Object.freeze(account === "reviewinbox" ? ["reviewinboxoppiexyz"] : ["oppie-agent-" + account, APP_NAMES[account].toLowerCase()])
     })])));
+    function configuredAccount(name, config = DEFAULT_CONFIG) {
+      if (typeof name !== "string" || !config.accounts.includes(name)) return null;
+      if (Object.hasOwn(ACCOUNTS, name)) return ACCOUNTS[name];
+      const a = Object.hasOwn(config.newAccounts, name) ? config.newAccounts[name] : null;
+      if (!a) return null;
+      const slug = a.appSlug || a.appName.toLowerCase();
+      return Object.freeze({ account: name, app_id: a.appId, installation_id: null, app_name: a.appName, app_slug: slug, app_slug_status: "expected_not_live", allowed_slugs: Object.freeze([.../* @__PURE__ */ new Set([slug, "oppie-agent-" + name])]), configured: true });
+    }
     function allowedAppSlug(account, slug) {
       return typeof slug === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.includes(slug);
     }
     function knownBotLogin(account, login) {
       return typeof login === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.some((slug) => login === slug + "[bot]");
     }
-    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "commit_files", "admin_get", "admin_update", ...QQ_ONLY]);
+    var OPERATION_NEEDS = Object.freeze({
+      identity: {},
+      get_contents: { contents: "read" },
+      list_branches: { contents: "read" },
+      list_issues: { issues: "read" },
+      get_issue: { issues: "read" },
+      create_issue: { issues: "write" },
+      update_issue: { issues: "write" },
+      comment_issue: { issues: "write" },
+      list_pulls: { pull_requests: "read" },
+      get_pull: { pull_requests: "read" },
+      pull_files: { pull_requests: "read" },
+      list_reviews: { pull_requests: "read" },
+      create_pull: { contents: "read", pull_requests: "write" },
+      update_pull: { pull_requests: "write" },
+      submit_review: { pull_requests: "write" },
+      dismiss_review: { pull_requests: "write" },
+      create_branch: { contents: "write" },
+      update_file: { contents: "write" },
+      edit_file: { contents: "write" },
+      commit_files: { contents: "write" },
+      enqueue_pull: { contents: "write", pull_requests: "write" },
+      list_rulesets: { administration: "read" },
+      get_ruleset: { administration: "read" },
+      ruleset_update: { administration: "write", issues: "read" },
+      admin_get: { administration: "read" },
+      admin_update: { administration: "write" }
+    });
+    var OPERATION_NAMES = Object.freeze(Object.keys(OPERATION_NEEDS));
     var CoreError = class extends Error {
       constructor(code, execution = "not_executed", status, details) {
         super(code);
@@ -399,6 +437,9 @@ var require_core = __commonJS({
     };
     function bad(code = "INVALID_ARGUMENTS") {
       throw new CoreError(code);
+    }
+    function configDigest(c) {
+      return crypto.createHash("sha256").update(JSON.stringify(c)).digest("hex").slice(0, 16);
     }
     function obj(x) {
       return !!x && typeof x === "object" && !Array.isArray(x);
@@ -433,21 +474,44 @@ var require_core = __commonJS({
       if (!x || x.startsWith("/") || /[\\%?#\x00-\x1f]/.test(x) || x.split("/").some((s) => !s || s === "." || s === "..")) bad("INVALID_PATH");
       return x.split("/").map(encodeURIComponent).join("/");
     }
-    function repoName(x, allowed = REPOSITORIES) {
+    function repoName(x) {
       if (typeof x !== "string") bad("REPOSITORY_REQUIRED");
       const n = x.startsWith(OWNER + "/") ? x.slice(OWNER.length + 1) : x;
-      if (!Object.hasOwn(allowed, n)) bad("REPOSITORY_NOT_ALLOWED");
+      if (!/^[A-Za-z0-9._-]{1,100}$/.test(n) || n === "." || n === "..") bad("REPOSITORY_NOT_ALLOWED");
       return n;
     }
-    function permissions(a, operation) {
-      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+    function permissions(operation) {
+      return { metadata: "read", ...OPERATION_NEEDS[operation] };
     }
-    function checkPermissions(actual, a, phase = "execution", operation) {
-      const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
-      const pgInstallation = phase === "installation" && a.account === "pg";
-      const allowSuperset = a.account === "qq" || pgInstallation;
-      if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
-      if (!obj(actual) || Object.entries(expected).some(([k, v]) => allowSuperset ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || !allowSuperset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
+    var WORKFLOW_DIR = ".github/workflows/";
+    function workflowPaths(preflight) {
+      const paths = ["file", "edit"].includes(preflight?.kind) ? [preflight.path] : preflight?.kind === "commit" ? preflight.plan.changes.flatMap((c) => c.from ? [c.from, c.path] : [c.path]) : [];
+      return paths.filter((p) => p.startsWith(WORKFLOW_DIR));
+    }
+    var PERMISSION_RANK = Object.freeze({ none: 0, read: 1, write: 2 });
+    function missingPermissions(actual, needed) {
+      const level = (k) => obj(actual) && typeof actual[k] === "string" && Object.hasOwn(PERMISSION_RANK, actual[k]) ? actual[k] : "none";
+      return Object.entries(needed).filter(([k, v]) => PERMISSION_RANK[level(k)] < PERMISSION_RANK[v]).map(([permission, required]) => ({ permission, required, installed: level(permission) }));
+    }
+    function checkInstallation(actual, a, operation, installationId, needed = permissions(operation), workflowFiles = []) {
+      const missing = missingPermissions(actual, needed);
+      if (!missing.length) return;
+      const appPermissionsUrl = "https://github.com/organizations/" + OWNER + "/settings/apps/" + a.app_slug + "/permissions", installationUrl = "https://github.com/organizations/" + OWNER + "/settings/installations/" + installationId;
+      throw new CoreError("INSTALLATION_PERMISSION_MISSING", "not_executed", void 0, {
+        account: a.account,
+        app: a.app_name,
+        operation,
+        missing,
+        ...workflowFiles.length ? { workflowFiles: workflowFiles.slice(0, 10) } : {},
+        appPermissionsUrl,
+        installationUrl,
+        fix: "Add " + missing.map((m) => m.permission + ":" + m.required + " (installed: " + m.installed + ")").join(", ") + " in the App permissions (" + appPermissionsUrl + ") and accept the update on the installation page (" + installationUrl + ")."
+      });
+    }
+    function checkTokenPermissions(actual, requested) {
+      const granted = obj(actual) ? Object.fromEntries(Object.entries(actual).filter(([, v]) => v !== "none")) : null;
+      if (!granted || Object.keys(granted).length !== Object.keys(requested).length || Object.entries(requested).some(([k, v]) => granted[k] !== v))
+        throw new CoreError("TOKEN_PERMISSION_MISMATCH", "not_executed", void 0, { requested, granted: granted ? Object.fromEntries(Object.entries(granted).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && typeof v === "string").slice(0, 60)) : null });
     }
     function makeJwt(account, pem, now = Date.now()) {
       const h = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -491,60 +555,26 @@ var require_core = __commonJS({
       if (/head (?:oid|sha|ref|commit)|expected ?head|expectedHeadOid/i.test(text)) return "QUEUE_HEAD_MISMATCH";
       return "QUEUE_REJECTED";
     }
-    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, repositoryPolicy = initialPolicy } = {}) {
+    function createClient2({ credentials, fetch: fetcher = globalThis.fetch, now = Date.now, authorize = async () => false, claimAuthorization = async () => false, scopeConfig = () => DEFAULT_CONFIG } = {}) {
       if (typeof credentials !== "function" || typeof fetcher !== "function") throw Error("DEPENDENCY_REQUIRED");
       async function run(input2) {
         let secrets = [], scopeDiagnostics;
         try {
-          let exactRepos = function(r, expected = expectedRepos) {
-            const count = Object.keys(expected).length;
-            return r?.total_count === count && Array.isArray(r.repositories) && r.repositories.length === count && r.repositories.every((x) => obj(x) && x.full_name === OWNER + "/" + x.name && expected[x.name] === x.id) && new Set(r.repositories.map((x) => x.id)).size === count;
-          }, scopeMismatch = function(code, observed, expected) {
-            const list = Array.isArray(observed?.repositories) ? observed.repositories : [];
-            const names = list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n));
-            scopeDiagnostics = {
-              expectedRepositories: Object.keys(expected).map((n) => OWNER + "/" + n),
-              actualRepositories: names,
-              actualRepositoriesComplete: Array.isArray(observed?.repositories) && names.length === list.length && observed.total_count === list.length
-            };
-            bad(code);
-          }, installedOptional = function(r, expected) {
-            if (!Array.isArray(r?.repositories) || r.total_count !== r.repositories.length) return null;
-            const ids = /* @__PURE__ */ new Set(), names = [];
-            for (const x of r.repositories) {
-              if (!obj(x) || typeof x.name !== "string" || x.full_name !== OWNER + "/" + x.name || !Number.isSafeInteger(x.id) || ids.has(x.id)) return null;
-              ids.add(x.id);
-              if (!Object.hasOwn(expected, x.name)) continue;
-              if (expected[x.name] !== x.id) return null;
-              names.push(x.name);
-            }
-            if (Object.keys(expected).some((n) => !OPTIONAL_REPOSITORIES.includes(n) && !names.includes(n))) return null;
-            return names.filter((n) => OPTIONAL_REPOSITORIES.includes(n));
-          };
           if (Buffer.byteLength(JSON.stringify(input2 ?? null), "utf8") > MAX_OPERATION_BYTES) bad("REQUEST_TOO_LARGE");
           exact(input2, ["account", "repo", "operation", "args"]);
-          if (typeof input2.account !== "string" || !Object.hasOwn(ACCOUNTS, input2.account)) bad("ACCOUNT_REQUIRED");
-          const account = ACCOUNTS[input2.account];
-          const operation = input2.operation;
-          if (!OPERATION_NAMES.includes(operation)) bad("UNKNOWN_OPERATION");
-          if (account.account === "qq" && !QQ_ALLOWED.includes(operation)) bad("QQ_AUTHORING_REFUSED");
-          if (QQ_ONLY.includes(operation) && account.account !== "qq") bad("QQ_ACCOUNT_REQUIRED");
-          let policy;
+          let config;
           try {
-            policy = validatePolicy(repositoryPolicy());
+            config = await scopeConfig();
           } catch (_) {
             bad("INVALID_SCOPE_CONFIGURATION");
           }
-          const scope = policy.accounts[account.account];
-          const expectedRepos = scope.execution;
-          const repo = repoName(input2.repo, expectedRepos);
+          const account = configuredAccount(input2.account, config);
+          if (!account) bad("ACCOUNT_REQUIRED");
+          const operation = input2.operation;
+          if (!OPERATION_NAMES.includes(operation)) bad("UNKNOWN_OPERATION");
+          const repo = input2.repo === void 0 && operation === "identity" ? null : repoName(input2.repo);
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
-          const restriction = repositoryRestriction(account.account, repo);
-          if (restriction) {
-            if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
-            if (restriction.commentOnly && operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
-          }
           const root = "/repos/" + OWNER + "/" + repo;
           let method = "GET", route, body, preflight;
           const number = () => positive(args.number);
@@ -709,7 +739,7 @@ var require_core = __commonJS({
               if (typeof args.owner_authorization !== "string" || !/^https:\/\/github\.com\/good-night-oppie\/[A-Za-z0-9_.-]+\/(issues|pull)\/[0-9]+#issuecomment-[0-9]+$/.test(args.owner_authorization)) bad("OWNER_AUTHORIZATION_REQUIRED");
               exact(args.ruleset, ["name", "target", "enforcement", "bypass_actors", "conditions", "rules"]);
               if (!Object.keys(args.ruleset).length || JSON.stringify(args.ruleset).length > 160) bad("RULESET_CHANGE_TOO_LARGE");
-              if (!await authorize({ account: "qq", repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
+              if (!await authorize({ account: account.account, repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
               method = "PUT";
               route = root + "/rulesets/" + args.ruleset_id;
               body = args.ruleset;
@@ -730,13 +760,12 @@ var require_core = __commonJS({
               break;
             case "admin_get":
               exact(args, []);
-              if (!account.admin) bad("ADMIN_ACCOUNT_REQUIRED");
               route = root;
               break;
             case "admin_update":
               exact(args, ["allow_squash_merge", "allow_merge_commit", "allow_rebase_merge", "delete_branch_on_merge"]);
-              if (!account.admin) bad("ADMIN_ACCOUNT_REQUIRED");
               if (!Object.keys(args).length || Object.values(args).some((x) => typeof x !== "boolean")) bad();
+              if (!await authorize({ account: account.account, repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
               method = "PATCH";
               route = root;
               body = { ...args };
@@ -774,40 +803,100 @@ var require_core = __commonJS({
           secrets.push(jwt);
           pem = null;
           const app = await api("/app", jwt);
-          if (Number(app?.id) !== account.app_id || !allowedAppSlug(account.account, app?.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
-          const installation = await api("/app/installations/" + account.installation_id, jwt);
-          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
-          checkPermissions(installation.permissions, account, "installation");
-          const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
-          if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
-          secrets.push(probeResponse.token);
-          async function listInstallation(token2) {
+          if (Number(app?.id) !== account.app_id || typeof app?.slug !== "string" || !account.allowed_slugs.includes(app.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
+          let installation;
+          if (account.installation_id) installation = await api("/app/installations/" + account.installation_id, jwt);
+          else {
+            const list = await api("/app/installations?per_page=100", jwt);
+            const mine = Array.isArray(list) ? list.filter((i) => obj(i) && i.account?.login === OWNER) : [];
+            if (mine.length !== 1) throw new CoreError("INSTALLATION_NOT_FOUND", "not_executed", void 0, { owner: OWNER, found: mine.length });
+            installation = mine[0];
+          }
+          const installationId = account.installation_id || Number(installation?.id);
+          if (!Number.isSafeInteger(installationId) || Number(installation?.id) !== installationId || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
+          const workflowFiles = workflowPaths(preflight), needed = workflowFiles.length ? { ...permissions(operation), workflows: "write" } : permissions(operation);
+          checkInstallation(installation.permissions, account, operation, installationId, needed, workflowFiles);
+          async function listInstallation() {
+            const probe = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
+            if (typeof probe?.token !== "string" || !probe.token) bad("INVALID_INSTALLATION_TOKEN");
+            secrets.push(probe.token);
             const repositories = [];
             let total = null;
             for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
-              const r = await api("/installation/repositories?per_page=100" + (page > 1 ? "&page=" + page : ""), token2);
-              if (!obj(r) || !Number.isSafeInteger(r.total_count) || !Array.isArray(r.repositories) || total !== null && r.total_count !== total) return { total_count: -1, repositories };
+              const r = await api("/installation/repositories?per_page=100" + (page > 1 ? "&page=" + page : ""), probe.token);
+              if (!obj(r) || !Number.isSafeInteger(r.total_count) || !Array.isArray(r.repositories) || total !== null && r.total_count !== total) return { complete: false, repositories };
               total = r.total_count;
-              repositories.push(...r.repositories);
+              repositories.push(...r.repositories.filter((x) => obj(x) && typeof x.full_name === "string").map((x) => x.full_name));
               if (repositories.length >= total || !r.repositories.length) break;
             }
-            return { total_count: total, repositories };
+            return { complete: repositories.length === total, repositories };
           }
-          const probe = await listInstallation(probeResponse.token);
-          const optionalPresent = installedOptional(probe, scope.installation);
-          if (optionalPresent === null) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
-          const effectiveRepos = Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n]) => !OPTIONAL_REPOSITORIES.includes(n) || optionalPresent.includes(n))));
-          if (!Object.hasOwn(effectiveRepos, repo)) bad("REPOSITORY_NOT_INSTALLED");
-          const tokenResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { repository_ids: Object.values(effectiveRepos), permissions: permissions(account, operation) });
-          if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
-          const token = tokenResponse.token;
-          secrets.push(token);
-          checkPermissions(tokenResponse.permissions, account, "execution", operation);
+          const installationPermissions = Object.fromEntries(Object.entries(obj(installation.permissions) ? installation.permissions : {}).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && Object.hasOwn(PERMISSION_RANK, v)).slice(0, 60));
+          const installationSummary = () => ({
+            app_id: account.app_id,
+            app_slug: app.slug,
+            owner: OWNER,
+            installation_id: installationId,
+            installationRepositorySelection: installation.repository_selection,
+            installationPermissions,
+            availableOperations: OPERATION_NAMES.filter((o) => !missingPermissions(installation.permissions, permissions(o)).length),
+            scopeRevision: config.revision,
+            scopeConfigSource: config === DEFAULT_CONFIG ? "default" : "file",
+            scopeConfigDigest: configDigest(config)
+          });
+          if (repo === null) return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: null, operation, execution: "completed", url: app.html_url }, result: clean({ ...installationSummary(), installationRepositories: await listInstallation() }, secrets) };
+          const proofRepo = preflight?.kind === "owner_reference" ? preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1] : null;
+          if (preflight?.kind === "owner_reference" && (!proofRepo || ![repo, "MontClip"].includes(proofRepo))) bad("OWNER_REFERENCE_SCOPE");
+          const tokenRepos = [.../* @__PURE__ */ new Set([repo, ...proofRepo ? [proofRepo] : []])];
+          const notInstalled = (e) => {
+            if (e instanceof CoreError && [404, 422].includes(e.status)) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", e.status, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
+            throw e;
+          };
+          const validToken = (r) => {
+            if (typeof r?.token !== "string" || !r.token || Date.parse(r.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(r.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
+            secrets.push(r.token);
+            return r.token;
+          };
+          let resolveResponse;
+          try {
+            resolveResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: { metadata: "read" } });
+          } catch (e) {
+            notInstalled(e);
+          }
+          const resolveToken = validToken(resolveResponse);
+          checkTokenPermissions(resolveResponse.permissions, { metadata: "read" });
+          const resolved = /* @__PURE__ */ new Map();
+          for (const n of tokenRepos) {
+            let r;
+            try {
+              r = await api("/repos/" + OWNER + "/" + n, resolveToken);
+            } catch (e) {
+              notInstalled(e);
+            }
+            if (!obj(r) || !Number.isSafeInteger(r.id) || r.id < 1 || typeof r.name !== "string" || r.name.toLowerCase() !== n.toLowerCase() || r.owner?.login !== OWNER || r.full_name !== OWNER + "/" + r.name) bad("REPOSITORY_RESOLUTION_FAILED");
+            resolved.set(n, r);
+          }
+          const tokenIds = [...new Set([...resolved.values()].map((r) => r.id))];
+          if (["branch", "file", "edit", "commit"].includes(preflight?.kind) && (typeof resolved.get(repo).default_branch !== "string" || resolved.get(repo).default_branch === preflight.branch)) bad("DEFAULT_BRANCH_WRITE_REFUSED");
+          let tokenResponse;
+          try {
+            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repository_ids: tokenIds, permissions: needed });
+          } catch (e) {
+            notInstalled(e);
+          }
+          const token = validToken(tokenResponse);
+          checkTokenPermissions(tokenResponse.permissions, needed);
           const repos = await api("/installation/repositories?per_page=100", token);
-          if (!exactRepos(repos, effectiveRepos)) scopeMismatch("EXECUTION_REPOSITORY_SCOPE_MISMATCH", repos, effectiveRepos);
+          const exactRepos = (r) => r?.total_count === tokenIds.length && Array.isArray(r.repositories) && r.repositories.length === tokenIds.length && r.repositories.every((x) => obj(x) && tokenIds.includes(x.id) && x.full_name === OWNER + "/" + x.name && [...resolved.values()].some((v) => v.id === x.id && v.full_name === x.full_name)) && new Set(r.repositories.map((x) => x.id)).size === tokenIds.length;
+          if (!exactRepos(repos)) {
+            const list = Array.isArray(repos?.repositories) ? repos.repositories : [];
+            scopeDiagnostics = { expectedRepositories: tokenRepos.map((n) => OWNER + "/" + n), actualRepositories: list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n)) };
+            bad("EXECUTION_REPOSITORY_SCOPE_MISMATCH");
+          }
+          const target = repos.repositories.find((x) => x.id === resolved.get(repo).id);
           if (preflight?.kind === "owner_reference") {
             const match = preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
-            if (!match || !Object.hasOwn(expectedRepos, match[1]) || ![repo, "MontClip"].includes(match[1])) bad("OWNER_REFERENCE_SCOPE");
+            if (!match || match[1] !== proofRepo) bad("OWNER_REFERENCE_SCOPE");
             const proof = await api("/repos/" + OWNER + "/" + match[1] + "/issues/comments/" + match[2], token);
             if (!validateProof(proof, repo, args, now())) bad("OWNER_REFERENCE_UNVERIFIED");
             if (!await claimAuthorization(args.nonce)) bad("OWNER_AUTHORIZATION_REPLAYED");
@@ -830,8 +919,6 @@ var require_core = __commonJS({
             if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
           }
           if (["branch", "file", "edit", "commit"].includes(preflight?.kind)) {
-            const metadata = await api(root, token);
-            if (metadata?.default_branch === preflight.branch) bad("DEFAULT_BRANCH_WRITE_REFUSED");
             if (["file", "edit"].includes(preflight.kind)) {
               let current;
               try {
@@ -876,8 +963,8 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.filter((r) => Object.hasOwn(scope.installation, r.name)).map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositorySelection: installation.repository_selection, installationRepositoryCount: probe.repositories.length, scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
-          return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
+          const result = operation === "identity" ? { ...installationSummary(), repository: { id: target.id, full_name: target.full_name }, installationRepositories: await listInstallation(), expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
+          return { ok: true, receipt: { scopeRevision: config.revision, account: account.account, app_slug: app.slug, installation_id: installationId, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
         } finally {
@@ -886,7 +973,7 @@ var require_core = __commonJS({
       }
       return { run };
     }
-    module2.exports = { createClient: createClient2, makeJwt, ACCOUNTS, APP_NAMES, allowedAppSlug, knownBotLogin, REPOSITORIES, OPERATION_NAMES, CoreError };
+    module2.exports = { createClient: createClient2, makeJwt, ACCOUNTS, configuredAccount, APP_NAMES, allowedAppSlug, knownBotLogin, REPOSITORIES, OPERATION_NAMES, OPERATION_NEEDS, permissions, CoreError };
   }
 });
 
@@ -1083,16 +1170,50 @@ var require_store = __commonJS({
       e.code = code;
       return e;
     }
+    var configuredAccounts = () => ({});
+    function setAccountResolver(fn) {
+      if (typeof fn !== "function") throw failure("INVALID_RESOLVER");
+      configuredAccounts = fn;
+    }
+    function configured(account) {
+      if (typeof account !== "string" || Object.hasOwn(APP_IDS, account)) return null;
+      let all;
+      try {
+        all = configuredAccounts();
+      } catch (_) {
+        return null;
+      }
+      return all && Object.hasOwn(all, account) ? all[account] : null;
+    }
+    function knownAccount(account) {
+      return typeof account === "string" && (Object.hasOwn(APP_IDS, account) || !!configured(account));
+    }
+    function slugAllowed(account, slug) {
+      if (Object.hasOwn(APP_IDS, account)) return allowedAppSlug(account, slug);
+      const c = configured(account);
+      return !!c && typeof slug === "string" && ["oppie-agent-" + account, c.appSlug || c.appName.toLowerCase()].includes(slug);
+    }
     function metadata(account) {
-      if (typeof account !== "string" || !Object.hasOwn(APP_IDS, account)) throw failure("UNKNOWN_ACCOUNT");
+      if (typeof account === "string" && Object.hasOwn(APP_IDS, account))
+        return {
+          account,
+          appId: APP_IDS[account],
+          installationId: INSTALL_IDS[account],
+          appSlug: ACCOUNTS[account].app_slug,
+          owner: "good-night-oppie",
+          repositoryIds: [1441621868, 1446532339],
+          admin: account === "qq"
+        };
+      const c = configured(account);
+      if (!c) throw failure("UNKNOWN_ACCOUNT");
       return {
         account,
-        appId: APP_IDS[account],
-        installationId: INSTALL_IDS[account],
-        appSlug: ACCOUNTS[account].app_slug,
+        appId: String(c.appId),
+        installationId: c.installationId ? String(c.installationId) : "auto",
+        appSlug: c.appSlug || c.appName.toLowerCase(),
         owner: "good-night-oppie",
         repositoryIds: [1441621868, 1446532339],
-        admin: account === "qq"
+        admin: false
       };
     }
     function entropy(account) {
@@ -1217,11 +1338,14 @@ var require_store = __commonJS({
         }
         return true;
       }
+      function shapeOnly(row) {
+        if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw failure("INVALID_STORE");
+      }
       function validateRow(row) {
         const fixed = metadata(row?.account);
         for (const k of Object.keys(fixed)) {
           if (k === "appSlug") {
-            if (!allowedAppSlug(fixed.account, row[k])) throw failure("INVALID_STORE");
+            if (!slugAllowed(fixed.account, row[k])) throw failure("INVALID_STORE");
           } else if (JSON.stringify(row[k]) !== JSON.stringify(fixed[k])) throw failure("INVALID_STORE");
         }
         if (!/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string" || row.ciphertext.length > 1e5 || !/^[A-Za-z0-9+/]+={0,2}$/.test(row.ciphertext)) throw failure("INVALID_STORE");
@@ -1240,13 +1364,22 @@ var require_store = __commonJS({
           await checkAcl(file);
           bytes = await plainFile(file, MAX_STORE);
           const doc = JSON.parse(bytes.toString("utf8"));
-          if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > 12) throw Error();
-          const seen = /* @__PURE__ */ new Set();
+          if (doc.version !== 1 || !Array.isArray(doc.accounts) || doc.accounts.length > 64) throw Error();
+          const seen = /* @__PURE__ */ new Set(), stale = /* @__PURE__ */ new Set();
           for (const row of doc.accounts) {
-            validateRow(row);
+            if (knownAccount(row?.account) && Object.hasOwn(APP_IDS, row.account)) validateRow(row);
+            else if (knownAccount(row?.account)) {
+              try {
+                validateRow(row);
+              } catch (_) {
+                shapeOnly(row);
+                stale.add(row.account);
+              }
+            } else if (typeof row?.account !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(row.account) || !/^[a-f0-9]{64}$/.test(row.fingerprint) || typeof row.ciphertext !== "string") throw Error();
             if (seen.has(row.account)) throw Error();
             seen.add(row.account);
           }
+          Object.defineProperty(doc, "stale", { value: stale, enumerable: false });
           return doc;
         } catch (_) {
           throw failure("INVALID_OR_UNSAFE_STORE");
@@ -1256,7 +1389,7 @@ var require_store = __commonJS({
       }
       function publicRow(row) {
         const { ciphertext, ...visible } = row;
-        return { ...visible, expectedAppSlug: ACCOUNTS[row.account].app_slug, appSlugStatus: "stored_not_live" };
+        return { ...visible, expectedAppSlug: metadata(row.account).appSlug, appSlugStatus: "stored_not_live" };
       }
       async function save(doc) {
         await ensureRoot(true);
@@ -1291,23 +1424,27 @@ var require_store = __commonJS({
           });
         }
       }
+      async function importKeyText(args) {
+        return importKey({ ...args, pem_text: args?.pem_text });
+      }
       async function importKey(args) {
         return serial(async () => {
           const fixed = metadata(args?.account);
           if (args.expected_fingerprint !== void 0 && !/^[a-f0-9]{64}$/.test(args.expected_fingerprint)) throw failure("INVALID_EXPECTED_FINGERPRINT");
           const supplied = args.pem_path || args.pemPath;
-          if (typeof supplied !== "string" || !path.isAbsolute(supplied) || path.extname(supplied).toLowerCase() !== ".pem") throw failure("INVALID_PEM_PATH");
+          const fromText = typeof args.pem_text === "string";
+          if (fromText ? supplied !== void 0 || args.pem_text.length > MAX_PEM : typeof supplied !== "string" || !path.isAbsolute(supplied) || path.extname(supplied).toLowerCase() !== ".pem") throw failure("INVALID_PEM_PATH");
           if (args.metadata) for (const [k, v] of Object.entries(args.metadata)) {
             if (k === "appSlug") {
-              if (!allowedAppSlug(fixed.account, v)) throw failure("ACCOUNT_METADATA_MISMATCH");
+              if (!slugAllowed(fixed.account, v)) throw failure("ACCOUNT_METADATA_MISMATCH");
             } else if (JSON.stringify(fixed[k]) !== JSON.stringify(v)) throw failure("ACCOUNT_METADATA_MISMATCH");
           }
           const doc = await read();
           const previous = doc.accounts.find((x) => x.account === fixed.account);
-          if (previous && !args.replace) throw failure("ACCOUNT_EXISTS");
+          if (previous && !args.replace && !doc.stale.has(fixed.account)) throw failure("ACCOUNT_EXISTS");
           let bytes;
           try {
-            bytes = await plainFile(supplied, MAX_PEM);
+            bytes = fromText ? Buffer.from(args.pem_text, "utf8") : await plainFile(supplied, MAX_PEM);
             const key = crypto.createPrivateKey(bytes);
             if (key.asymmetricKeyType !== "rsa" || key.asymmetricKeyDetails.modulusLength < 2048) throw failure("INVALID_RSA_KEY");
             const pub = crypto.createPublicKey(key).export({ type: "spki", format: "der" });
@@ -1332,6 +1469,7 @@ var require_store = __commonJS({
         const doc = await read();
         const row = doc.accounts.find((x) => x.account === account);
         if (!row) throw failure("ACCOUNT_NOT_CONNECTED");
+        if (doc.stale.has(account)) throw failure("KEY_IMPORTED_FOR_OTHER_APP");
         let plain;
         try {
           plain = await unprotect(Buffer.from(row.ciphertext, "base64"), entropy(account));
@@ -1349,12 +1487,99 @@ var require_store = __commonJS({
       }
       async function list() {
         await queue;
-        return (await read()).accounts.map(publicRow);
+        const doc = await read();
+        return doc.accounts.filter((r) => knownAccount(r.account) && !doc.stale.has(r.account)).map(publicRow);
       }
-      return { importKey, load, list, paths: { root, file }, backendName: linux ? linux.backendName : "Windows DPAPI CurrentUser" };
+      const PRIVATE_NAMES = ["scope-config.json", "scope-config-audit.jsonl", "scope-config.key"];
+      async function readPrivate(name) {
+        if (!PRIVATE_NAMES.includes(name)) throw failure("INVALID_PRIVATE_FILE");
+        if (!await ensureRoot()) return null;
+        const target = path.join(root, name);
+        try {
+          await fs.lstat(target);
+        } catch (e) {
+          if (e.code === "ENOENT") return null;
+          throw failure("INVALID_PRIVATE_FILE");
+        }
+        await checkAcl(target);
+        return (await plainFile(target, MAX_STORE)).toString("utf8");
+      }
+      async function writePrivate(name, text) {
+        return serial(async () => {
+          if (!PRIVATE_NAMES.includes(name) || typeof text !== "string" || Buffer.byteLength(text) > MAX_STORE) throw failure("INVALID_PRIVATE_FILE");
+          await ensureRoot(true);
+          const target = path.join(root, name);
+          const temporary = path.join(root, ".private-" + crypto.randomBytes(12).toString("hex") + ".tmp");
+          let handle;
+          try {
+            handle = await fs.open(temporary, "wx", 384);
+            await handle.close();
+            handle = null;
+            await tighten(temporary, false);
+            await checkAcl(root);
+            handle = await fs.open(temporary, "r+");
+            await handle.writeFile(text);
+            await handle.sync();
+            await handle.close();
+            handle = null;
+            try {
+              await fs.lstat(target);
+              await checkAcl(target);
+              await plainFile(target, MAX_STORE);
+            } catch (e) {
+              if (e.code !== "ENOENT") throw e;
+            }
+            await fs.rename(temporary, target);
+            await checkAcl(target);
+          } catch (_) {
+            throw failure("STORE_WRITE_FAILED");
+          } finally {
+            await handle?.close().catch(() => {
+            });
+            await fs.unlink(temporary).catch(() => {
+            });
+          }
+        });
+      }
+      const SCOPE_KEY_FILE = "scope-config.key", SCOPE_KEY_CONTEXT = "oppie-github/v1/scope-config";
+      async function readScopeKey() {
+        const text = await readPrivate(SCOPE_KEY_FILE);
+        if (text === null) return null;
+        let sealed;
+        try {
+          const doc = JSON.parse(text);
+          if (doc.v !== 1 || typeof doc.sealed !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(doc.sealed)) throw Error();
+          sealed = Buffer.from(doc.sealed, "base64");
+        } catch (_) {
+          throw failure("INVALID_SCOPE_KEY");
+        }
+        let plain;
+        try {
+          plain = await unprotect(sealed, SCOPE_KEY_CONTEXT);
+          const state = JSON.parse(Buffer.from(plain).toString("utf8"));
+          if (typeof state.key !== "string" || !/^[a-f0-9]{64}$/.test(state.key) || !Number.isSafeInteger(state.revision) || state.revision < 0) throw Error();
+          return { key: Buffer.from(state.key, "hex"), revision: state.revision };
+        } catch (e) {
+          if (e.code === "SECURE_STORAGE_UNAVAILABLE") throw e;
+          throw failure("INVALID_SCOPE_KEY");
+        } finally {
+          plain?.fill?.(0);
+        }
+      }
+      async function writeScopeKey({ key, revision }) {
+        if (!Buffer.isBuffer(key) || key.length !== 32 || !Number.isSafeInteger(revision) || revision < 0) throw failure("INVALID_SCOPE_KEY");
+        const plain = Buffer.from(JSON.stringify({ key: key.toString("hex"), revision }), "utf8");
+        try {
+          const sealed = await protect(plain, SCOPE_KEY_CONTEXT);
+          await writePrivate(SCOPE_KEY_FILE, JSON.stringify({ v: 1, sealed: Buffer.from(sealed).toString("base64") }));
+        } finally {
+          plain.fill(0);
+        }
+      }
+      return { importKey, importKeyText, load, list, readPrivate, writePrivate, readScopeKey, writeScopeKey, paths: { root, file }, backendName: linux ? linux.backendName : "Windows DPAPI CurrentUser" };
     }
     var defaultStore = createStore();
-    module2.exports = { ...defaultStore, createStore, metadata, APP_IDS, INSTALL_IDS, tightenNew, verifyWindowsAcl };
+    module2.exports = { ...defaultStore, createStore, metadata, setAccountResolver, APP_IDS, INSTALL_IDS, tightenNew, verifyWindowsAcl };
   }
 });
 

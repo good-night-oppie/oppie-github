@@ -1,3 +1,5 @@
+> Update 2026-11-16 (owner decision, 1.5.0-preview.10-settings.7): ReviewInbox, like every account, can do what its GitHub App installation allows on the repositories that installation covers; the plugin no longer keeps its own repository or operation lists. See SCOPE-CONFIG.md. The text below is history.
+
 > Candidate update 2026-11-14: all accounts retain seven repositories. DD and QQ inherit their original repository operation boundaries on cindy. Global account guards remain. ReviewInbox now has ordinary read/write and review permissions on all seven repositories. This notice supersedes older fork-specific DD/QQ restrictions below.
 
 # ReviewInbox repository scope
