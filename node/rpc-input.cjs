@@ -9,7 +9,7 @@ function createReceiver({dispatch,reply}){
   if(Buffer.byteLength(JSON.stringify(r.params??{}))>PARAM_BYTES){reply({jsonrpc:'2.0',id:r.id,result:{ok:false,errorCode:'REQUEST_TOO_LARGE',execution:'not_executed'}});return;}
   if(active>=32){reply({jsonrpc:'2.0',id:r.id,result:{ok:false,errorCode:'REQUEST_CAPACITY',execution:'not_executed'}});return;}
   active++;
-  try{const result=await dispatch(r.method,r.params||{});reply({jsonrpc:'2.0',id:r.id,result});}
+  try{const host=r.cindy&&typeof r.cindy==='object'&&!Array.isArray(r.cindy)?r.cindy:undefined;const result=await dispatch(r.method,r.params||{},host);reply({jsonrpc:'2.0',id:r.id,result});}
   catch(e){const code=typeof e.code==='string'&&/^[A-Z_]+$/.test(e.code)?e.code:'REQUEST_FAILED';reply({jsonrpc:'2.0',id:r.id,result:{ok:false,errorCode:code,execution:e.execution==='not_executed'?'not_executed':['accounts','operations','author_cue'].includes(r.method)?'not_executed':'unknown',message:'请求未执行或未完成；写操作结果未知时先读回，不自动重试。'}});}
   finally{active--;}
  };
