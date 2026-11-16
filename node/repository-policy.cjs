@@ -18,6 +18,9 @@ function repositoryRestriction(account,repo,config=DEFAULT_CONFIG){
  const table=Object.hasOwn(config.repositoryRoles,repo)?config.repositoryRoles[repo]:null;
  const role=table&&Object.hasOwn(table,account)?table[account]:Object.hasOwn(config.newAccounts,account)?config.newAccounts[account].role:'write';
  if(role==='write')return null;
+ if(role==='none')return Object.freeze({operations:Object.freeze([]),commentOnly:false,none:true});
+ // reviewer: the review operations plus comment_issue; reviews may APPROVE or REQUEST_CHANGES.
+ if(role==='reviewer')return Object.freeze({operations:Object.freeze([...new Set([...config.reviewOperations,'comment_issue'])]),commentOnly:false});
  return Object.freeze({operations:config.reviewOperations,commentOnly:role==='comment_review'});
 }
 function invalid(){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';throw e;}
@@ -36,7 +39,8 @@ function repoMap(value,catalog){
  if(Object.keys(selected).length!==names.length)invalid();
  return Object.freeze(selected);
 }
-function baseline(account,config){return {installation:config.repositories,execution:config.repositories};}
+// Repositories with role 'none' for this account are not in its execution set (never in a token).
+function baseline(account,config){return {installation:config.repositories,execution:Object.freeze(Object.fromEntries(Object.entries(config.repositories).filter(([r])=>config.repositoryRoles[r]?.[account]!=='none')))};}
 function sameMap(a,b){return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>a[k]===b[k]);}
 function validatePolicy(value,config=DEFAULT_CONFIG){
  record(value,['schemaVersion','revision','accounts']);
