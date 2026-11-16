@@ -78,6 +78,7 @@ Every teammate commits as its own bot. Set both `user.name` and `user.email` in 
 | Video | `videooppiexyz[bot]` | `354008299+videooppiexyz[bot]@users.noreply.github.com` |
 | VV | `vvoppiexyz[bot]` | `354008317+vvoppiexyz[bot]@users.noreply.github.com` |
 | ReviewInbox | `reviewinboxoppiexyz[bot]` | `354633415+reviewinboxoppiexyz[bot]@users.noreply.github.com` |
+| AD (added in the settings page, account `ad`) | `adoppiexyz[bot]` | `356804371+adoppiexyz[bot]@users.noreply.github.com` |
 
 Rules:
 
