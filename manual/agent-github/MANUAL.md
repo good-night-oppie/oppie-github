@@ -4,7 +4,7 @@ Use `ghost_call` with ghost_id `oppie-github`, namespace `local`. This is a loca
 
 ## Choosing an account
 
-The fixed aliases are bb, cindy, deja, dd, gg, jj, pg, qq, rea, video, vv and reviewinbox. When a known teammate is executing its own assigned task, use that teammate's alias. Normal tasks choose the account explicitly from user context. If unknown, ask; never assume QQ for its broader rights. Never fall back to EdwardTang or the shared GitHub plugin when this integration fails.
+The fixed aliases are bb, cindy, deja, dd, gg, jj, pg, qq, rea, video, vv, ad and reviewinbox. When a known teammate is executing its own assigned task, use that teammate's alias. Normal tasks choose the account explicitly from user context. If unknown, ask; never assume QQ for its broader rights. Never fall back to EdwardTang or the shared GitHub plugin when this integration fails.
 
 `github_accounts` lists key presence only. `github` operation `identity` verifies the actual App, installation, owner, permissions and repository set. Every operation takes account and repo. Repository scopes are compiled per account. Since 1.5.0-preview.8-seven-roles.2 (2026-11-15, P0) the Apps may have access to all repositories: repository_selection 'all' is accepted, installed repositories outside the catalog are ignored, the target must be in the catalog (otherwise REPOSITORY_NOT_ALLOWED, not executed) and execution tokens stay narrowed to catalog repositories. Every account's installation must contain the six repositories MontClip, MontClip-Cindy, montclip-rsi, rsi-playbooks, oppie-github and sglang-review-inbox, and may also contain the optional cindy (the fork good-night-oppie/cindy, #22), all under good-night-oppie. While cindy is not installed, cindy operations return REPOSITORY_NOT_INSTALLED and other repositories keep working; any other extra or missing repository is INSTALLATION_REPOSITORY_SCOPE_MISMATCH. Execution (user authorization 2026-11-14, 1.5.0-preview.8-seven-roles.1): every account, including ReviewInbox, executes on all seven repositories. DD and QQ now inherit their original-six-repository operation boundaries on cindy. Global account allowlists, authoring restrictions and authorization checks remain in force; this does not add new administration grants to PG, Deja or other accounts. ReviewInbox has ordinary contents/issues/pull_requests write permissions and supports COMMENT, APPROVE and REQUEST_CHANGES reviews on all seven repositories; normal review-head checks still apply. Never open a PR against upstream makecindy/cindy through this plugin. The automatic review queue is a separate configuration limited to MontClip and MontClip-Cindy and is not enabled by repository scope. `github_operations` supplies argument formats. Each result has the actual App and installation receipt.
 
@@ -77,6 +77,7 @@ Every teammate commits as its own bot. Set both `user.name` and `user.email` in 
 | Rea | `reaoppiexyz[bot]` | `354008275+reaoppiexyz[bot]@users.noreply.github.com` |
 | Video | `videooppiexyz[bot]` | `354008299+videooppiexyz[bot]@users.noreply.github.com` |
 | VV | `vvoppiexyz[bot]` | `354008317+vvoppiexyz[bot]@users.noreply.github.com` |
+| AD | `adoppiexyz[bot]` | `356804371+adoppiexyz[bot]@users.noreply.github.com` |
 | ReviewInbox | `reviewinboxoppiexyz[bot]` | `354633415+reviewinboxoppiexyz[bot]@users.noreply.github.com` |
 
 Rules:

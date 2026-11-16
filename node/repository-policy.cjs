@@ -7,17 +7,23 @@ const CATALOG=Object.freeze({...SIX,cindy:1457433299});
 // #22 (QQ, production incident): installations with or without cindy are both valid until DD
 // finishes the rollout. Only these repositories may be absent from an installation.
 const OPTIONAL_REPOSITORIES=Object.freeze(['cindy']);
-const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
+const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','ad','reviewinbox']);
 const TWO=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339});
 // 2026-11-14: cindy inherits each account's original repository operation boundaries.
 // 'write' disables only the fork-specific restriction; global account controls still apply.
 const CINDY_ROLES=Object.freeze({bb:'write',deja:'write',dd:'write',qq:'write'});
 const CINDY_EXECUTION=Object.freeze(Object.keys(CINDY_ROLES));
 const REVIEW_OPERATIONS=Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review']);
-// Per-repository operation allowlist on top of the account's existing role; null means unchanged.
+// #28 (QQ decision): the AD teammate reads, comments on issues and PRs and submits reviews
+// (including APPROVE/REQUEST_CHANGES) on every repository; no pushes, branches, issue/PR edits,
+// merges, queueing, settings or admin.
+const REVIEWER_OPERATIONS=Object.freeze([...REVIEW_OPERATIONS,'comment_issue']);
+const ACCOUNT_RESTRICTIONS=Object.freeze({ad:Object.freeze({operations:REVIEWER_OPERATIONS,commentOnly:false,code:'REVIEW_ONLY_ACCOUNT'})});
+// Operation allowlist on top of the account's existing role; null means unchanged.
 function repositoryRestriction(account,repo){
+ if(Object.hasOwn(ACCOUNT_RESTRICTIONS,account))return ACCOUNT_RESTRICTIONS[account];
  if(repo!=='cindy'||!Object.hasOwn(CINDY_ROLES,account)||CINDY_ROLES[account]==='write')return null;
- return Object.freeze({operations:REVIEW_OPERATIONS,commentOnly:CINDY_ROLES[account]==='comment_review'});
+ return Object.freeze({operations:REVIEW_OPERATIONS,commentOnly:CINDY_ROLES[account]==='comment_review',code:'REVIEW_ONLY_REPOSITORY'});
 }
 function invalid(){const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';throw e;}
 function record(value,keys){
@@ -53,4 +59,4 @@ function validatePolicy(value){
  return Object.freeze({schemaVersion:1,revision:value.revision,accounts:Object.freeze(accounts)});
 }
 function initialPolicy(){return validatePolicy({schemaVersion:1,revision:0,accounts:Object.fromEntries(ACCOUNT_NAMES.map(a=>[a,baseline(a)]))});}
-module.exports={CATALOG,SIX,TWO,OPTIONAL_REPOSITORIES,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};
+module.exports={CATALOG,SIX,TWO,OPTIONAL_REPOSITORIES,CINDY_ROLES,CINDY_EXECUTION,REVIEW_OPERATIONS,REVIEWER_OPERATIONS,ACCOUNT_RESTRICTIONS,repositoryRestriction,ACCOUNT_NAMES,initialPolicy,validatePolicy};

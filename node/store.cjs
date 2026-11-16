@@ -9,8 +9,8 @@ const { promisify } = require('node:util');
 const runFile = promisify(execFile);
 const {ACCOUNTS,allowedAppSlug}=require('./core.cjs');
 
-const APP_IDS = { bb:'5665927', cindy:'5665939', deja:'5665940', dd:'5665941', gg:'5665942', jj:'5665943', pg:'5665944', qq:'5665946', rea:'5665948', video:'5665949', vv:'5665951', reviewinbox:'5687106' };
-const INSTALL_IDS = { bb:'179806310', cindy:'179806330', deja:'179806356', dd:'179806387', gg:'179806414', jj:'179806445', pg:'179806482', qq:'179806512', rea:'179806534', video:'179806582', vv:'179806217', reviewinbox:'180305629' };
+const APP_IDS = { bb:'5665927', cindy:'5665939', deja:'5665940', dd:'5665941', gg:'5665942', jj:'5665943', pg:'5665944', qq:'5665946', rea:'5665948', video:'5665949', vv:'5665951', ad:'5764947', reviewinbox:'5687106' };
+const INSTALL_IDS = { bb:'179806310', cindy:'179806330', deja:'179806356', dd:'179806387', gg:'179806414', jj:'179806445', pg:'179806482', qq:'179806512', rea:'179806534', video:'179806582', vv:'179806217', ad:'182084517', reviewinbox:'180305629' };
 const MAX_PEM = 32768;
 const MAX_STORE = 1048576;
 function failure(code) { const e = new Error(code); e.code = code; return e; }
@@ -130,7 +130,7 @@ function createStore(options={}) {
     try {
       await checkAcl(file);bytes=await plainFile(file,MAX_STORE);
       const doc=JSON.parse(bytes.toString('utf8'));
-      if(doc.version!==1||!Array.isArray(doc.accounts)||doc.accounts.length>12)throw Error();
+      if(doc.version!==1||!Array.isArray(doc.accounts)||doc.accounts.length>Object.keys(APP_IDS).length)throw Error();
       const seen=new Set();for(const row of doc.accounts){validateRow(row);if(seen.has(row.account))throw Error();seen.add(row.account);}
       return doc;
     }catch(_){throw failure('INVALID_OR_UNSAFE_STORE');}finally{bytes?.fill(0);}
