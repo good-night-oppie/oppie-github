@@ -81,12 +81,15 @@ test('INSTALLATION_MISMATCH names each failed check with expected and actual val
  assert.deepEqual(both.details.failed.map(x=>x.check),['installation_id','suspended']);
  assert.match(explain(both).message,/安装 ID（应为 [0-9]+，GitHub 返回 1）；安装是否被暂停/);
 });
-test('APP_IDENTITY_MISMATCH names the failed check',async()=>{
- for(const [app,check] of [[{id:1},'app_id'],[{slug:'other-app'},'app_slug'],[{owner:{login:'x'}},'app_owner']]){
+test('APP_IDENTITY_MISMATCH names the failed check; a different slug is a warning with plain text',async()=>{
+ for(const [app,check] of [[{id:1},'app_id'],[{owner:{login:'x'}},'app_owner']]){
   const r=await run(fixture('bb',{app}),'bb');
   assert.equal(r.errorCode,'APP_IDENTITY_MISMATCH');assert.deepEqual(r.details.failed.map(x=>x.check),[check]);
   assert.doesNotMatch(JSON.stringify(explain(r)),SECRETISH);
  }
+ // A different slug no longer stops identity (core test 'identity anchor is the App ID'); the worker adds plain text.
+ const w=explain({ok:true,receipt:{account:'bb',warnings:[{check:'app_slug',expected:'oppie-agent-bb or bboppiexyz',actual:'other-app'}]},result:{}});
+ assert.equal(w.ok,true);assert.ok(w.warning.includes('other-app')&&w.warning.includes('App ID'));assert.doesNotMatch(JSON.stringify(w),SECRETISH);
 });
 test('a configuration failure keeps its reason through core and the worker reply',async()=>{
  const failing=()=>{const e=new Error('INVALID_SCOPE_CONFIGURATION');e.code='INVALID_SCOPE_CONFIGURATION';e.reason='signature mismatch'+String.fromCharCode(10)+'second line';throw e;};
