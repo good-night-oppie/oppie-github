@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node --test test/*.test.cjs",
     "build:skill": "node scripts/build-skill.cjs",
-    "check:bundle": "node scripts/build-skill.cjs --check"
+    "check:bundle": "node scripts/build-skill.cjs --check",
+    "verify:installed": "node scripts/verify-installed.cjs"
   },
   "devDependencies": {
     "esbuild": "0.27.0"
