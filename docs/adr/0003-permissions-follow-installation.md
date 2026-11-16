@@ -129,3 +129,27 @@ Unit tests with synthetic responses cover:
 - no token in logs or return values.
 
 Acceptance after install: run identity for every account, plus one read and one comment per teammate on a test issue, on Win11 and on arena.
+
+## Amendment 1 — reconciled with the implementation in #33 (head e8c1be06)
+
+Decided by PG on 2026-11-16 after the implementer listed the differences in #33 comment 6908132008. Where the implementation is stricter or more precise, this ADR follows the implementation. The items below supersede the matching text above.
+
+- **Built-in accounts (§1, §2 step 5).** Until the migration step, the twelve built-in accounts keep their compiled App IDs and installation IDs, as QQ allowed in 5914736615. The installation's owner, type and suspended state are still checked. The migration moves them into the signed configuration through one owner confirmation card. It is done together with removing `deployment.json`, in step 3 of the Order.
+- **automaticReviews (§1, §6).** Until step 3, it is read from `deployment.json` once at start and defaults to off. From step 3 it lives in the signed configuration, defaults to off, and changes only through a confirmation card.
+- **App slug (§1).** The numeric App ID is the only identity anchor. A slug that differs from the recorded one is reported as a warning and does not stop the account. This is implemented in step 1 (#36).
+- **Installation listing and organisation-wide token (§2 "Removed").** These stay, but only for `identity` and for the private-key import card, which must show the installed repositories (§1). Business operations never use them.
+- **Error codes (§2, §7).** These replace the names used above:
+  - `TOKEN_PERMISSION_MISMATCH`: the token has more, stronger or fewer permissions than requested.
+  - `EXECUTION_REPOSITORY_SCOPE_MISMATCH`: the token covers the wrong repository.
+  - `INSTALLATION_PERMISSION_MISSING`: reported before the token is requested, when the installation lacks a needed permission.
+  - `REPOSITORY_RESOLUTION_FAILED`: the repository name could not be resolved to an ID.
+  - `REPOSITORY_NOT_ALLOWED`: only for repositories outside good-night-oppie.
+- **Repository ID (§2 step 6).** The name is resolved with a metadata-only token; the execution token is requested by `repository_ids` and checked to cover exactly that ID. Exception: the `ruleset_update` token also covers the repository that holds the owner's authorization comment, because it has to read that comment.
+- **admin_update (§4).** It now has the owner confirmation card, added in #33.
+- **Permission table (§3), completed.** Every token includes `metadata:read`.
+  - `identity`: metadata:read only.
+  - `create_pull`: contents:read + pull_requests:write.
+  - `ruleset_update`: administration:write + issues:read.
+  - Writes under `.github/workflows/`: add workflows:write.
+  - `comment_issue`: issues:write; when the target number is a pull request, also pull_requests:write. Without it, GitHub returns 403 on pull-request comments (#8 6909218332). Fixed in step 1 (#36) with priority, because it blocks calling reviewers on PRs.
+- **Private key storage.** The existing DPAPI store, unchanged, as the owner said.
