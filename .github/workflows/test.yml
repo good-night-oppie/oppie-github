@@ -1,5 +1,10 @@
 name: source-tests
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # Merge queue: the required checks also run on the queue's merge_group commit.
+  merge_group:
+    types: [checks_requested]
 permissions:
   contents: read
 jobs:
