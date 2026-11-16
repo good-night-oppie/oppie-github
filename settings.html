@@ -20,10 +20,13 @@
         <label>Installation ID<input id="acc-install-id" inputmode="numeric" autocomplete="off"></label>
         <label>角色<select id="acc-role">
           <option value="review">只读+评审</option>
+          <option value="reviewer">只读+评论+评审（可批准或要求修改）</option>
           <option value="comment_review">只读+仅 COMMENT 评审</option>
           <option value="write">普通读写（不含管理员）</option>
         </select></label>
       </div>
+      <label class="check"><input id="acc-broad" type="checkbox">允许这个 App 的安装权限比角色宽（执行令牌仍按角色严格核对）</label>
+      <fieldset><legend>可用仓库（取消勾选 = 这个账号不能用该仓库）</legend><div id="acc-repos" class="ops"></div></fieldset>
       <fieldset><legend>可用操作（不勾选 = 按角色全部可用）</legend><div id="acc-ops" class="ops"></div></fieldset>
       <button id="acc-apply" type="button">放入待保存</button>
       <p class="muted">内置的 12 个账号身份写在代码里，只能在这里停用或启用，不能修改。</p>
