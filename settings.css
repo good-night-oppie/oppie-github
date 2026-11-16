@@ -1,0 +1,25 @@
+body { margin: 0; padding: 12px; font-size: 13px; line-height: 1.5; }
+section { margin-bottom: 16px; }
+h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+.muted { color: var(--text-secondary, #6b6b66); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border-default, #e4e4e0); vertical-align: top; word-break: break-word; }
+th { font-weight: 500; color: var(--text-secondary, #6b6b66); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 10px; margin: 6px 0; }
+label { display: flex; flex-direction: column; gap: 2px; }
+label.check { flex-direction: row; align-items: center; gap: 6px; }
+input, select, textarea, button {
+  font: inherit; color: inherit;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-default, #e4e4e0);
+  border-radius: 6px; padding: 4px 8px;
+}
+textarea { font-family: var(--font-mono, ui-monospace, monospace); resize: vertical; }
+button { cursor: pointer; margin: 2px 6px 2px 0; }
+button.primary { border-color: var(--accent, #3b6ef5); color: var(--accent, #3b6ef5); }
+button:disabled { opacity: .5; cursor: default; }
+fieldset { border: 1px solid var(--border-default, #e4e4e0); border-radius: 6px; margin: 6px 0; padding: 4px 8px; }
+.ops { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 2px 8px; }
+.ops label { flex-direction: row; align-items: center; gap: 4px; }
+.tag { font-size: 11px; color: var(--text-secondary, #6b6b66); }
+.error { color: var(--danger, #d13b3b); }
