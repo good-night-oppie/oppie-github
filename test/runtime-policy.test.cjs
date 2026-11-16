@@ -21,6 +21,7 @@ function fixture({invalid=false}={}){
   if(name==='./core.cjs')return {configuredAccount:n=>({account:n}),ACCOUNTS:{deja:{},qq:{}},createClient:options=>{clients.push(options);return {run:async input=>{const snapshot=options.repositoryPolicy?.();calls.push({input,snapshot});if(!snapshot?.accounts?.[input.account]?.execution?.[input.repo])return {ok:false,errorCode:'WRONG_RUNTIME_POLICY'};return {ok:true,result:{app_slug:'synthetic'}};}};}};
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
   if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>({ok:false}),stop:async()=>({ok:true})})};
+  if(name==='./messages.cjs')return require('../node/messages.cjs');
   if(name==='./deployment.cjs')return {createDeploymentReader:()=>async()=>({accounts:['deja','qq'],automaticReviews:false})};
   if(name==='./operations.cjs')return {};
   return require(name);
