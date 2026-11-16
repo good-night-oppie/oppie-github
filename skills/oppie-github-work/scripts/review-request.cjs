@@ -765,6 +765,7 @@ var require_core = __commonJS({
             case "admin_update":
               exact(args, ["allow_squash_merge", "allow_merge_commit", "allow_rebase_merge", "delete_branch_on_merge"]);
               if (!Object.keys(args).length || Object.values(args).some((x) => typeof x !== "boolean")) bad();
+              if (!await authorize({ account: account.account, repo, operation, args })) bad("OWNER_CONFIRMATION_REQUIRED");
               method = "PATCH";
               route = root;
               body = { ...args };
