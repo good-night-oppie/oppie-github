@@ -186,11 +186,21 @@ for(const [account,execution] of Object.entries(DESIGN)){
    assert.deepEqual(r.result.repositories.map(x=>x.id),effective,state);
   }
  });
- test(account+' still refuses an extra non-cindy repository and a missing required repository',async()=>{
+ test(account+' ignores an extra installed repository but never mints a token for it',async()=>{
   const extra={id:99,name:'other',full_name:'good-night-oppie/other'};
+  for(const base of [SEVEN,SIX]){
+   const r=rows(base);r.repositories.push(extra);r.total_count++;
+   const f=fixture(account,{installed:r}),res=await run(f,account,'identity',{},Object.keys(execution)[0]);
+   assert.equal(res.ok,true,res.errorCode);
+   assert.ok(!tokens(f).at(-1).body.repository_ids.includes(99));
+   assert.ok(!res.result.installationRepositories.some(x=>x.id===99));
+   const denied=fixture(account,{installed:r}),d=await run(denied,account,'get_issue',{number:1},'other');
+   assert.equal(d.errorCode,'REPOSITORY_NOT_ALLOWED');assert.equal(d.execution,'not_executed');assert.equal(denied.keyReads(),0);assert.equal(denied.calls.length,0);
+  }
+ });
+ test(account+' still refuses a missing required repository, a wrong ID, duplicates and an incomplete listing',async()=>{
   const cases=[];
   for(const base of [SEVEN,SIX]){
-   const r=rows(base);r.repositories.push(extra);r.total_count++;cases.push(['extra',r]);
    for(const name of Object.keys(SIX))cases.push(['missing '+name,rows(without(base,name))]);
   }
   const wrongId=rows(SEVEN);wrongId.repositories.at(-1).id=1;cases.push(['wrong cindy id',wrongId]);
@@ -231,10 +241,10 @@ for(const [account,execution] of Object.entries(DESIGN))test(account+' across si
   const [operation,args,code]=ROLE_PROBE[account],r=await run(seven,account,operation,args);
   if(code)assert.equal(r.errorCode,code);else{assert.equal(r.ok,true,r.errorCode);assert.equal(writes(seven).length,1);}
  }else assert.equal((await run(seven,account,'get_issue',{number:1})).ok,true);
- // Six plus an unknown repository: still a mismatch, before any execution token.
+ // Six plus an unknown repository (2026-11-15): accepted, and the stranger never reaches the token.
  const odd=rows(SIX);odd.repositories.push(STRANGER);odd.total_count++;
  const f=fixture(account,{installed:odd}),r=await run(f,account,'identity',{},Object.keys(execution)[0]);
- assert.equal(r.errorCode,'INSTALLATION_REPOSITORY_SCOPE_MISMATCH');assert.equal(r.execution,'not_executed');assert.equal(tokens(f).length,1);
+ assert.equal(r.ok,true,r.errorCode);assert.ok(!tokens(f).at(-1).body.repository_ids.includes(STRANGER.id));
 });
 
 test('ReviewInbox supports all review decisions across seven repositories',async()=>{for(const repo of Object.keys(SEVEN))for(const event of ['COMMENT','APPROVE','REQUEST_CHANGES']){const f=fixture('reviewinbox'),r=await run(f,'reviewinbox','submit_review',{number:7,commit_id:SHA,event,body:'synthetic'},repo);assert.equal(r.ok,true,repo+' '+event+': '+r.errorCode);assert.equal(writes(f).length,1);}});
