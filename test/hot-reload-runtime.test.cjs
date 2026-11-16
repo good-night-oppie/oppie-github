@@ -84,8 +84,11 @@ test('same worker process: deployment.json account edits and settings saves appl
  // silently revert to the compiled defaults (which would undo the owner's restrictions).
  fs.unlinkSync(path.join(dir,'private','scope-config.json'));fs.unlinkSync(path.join(dir,'private','scope-config.key'));
  const gone=await run('deja','new-repo');assert.equal(gone.errorCode,'INVALID_SCOPE_CONFIGURATION');assert.equal(gone.execution,'not_executed');
+ // The worker reply says why and who acts next (PG design review #8 step 1).
+ assert.match(gone.message,/原因：configuration and key deleted after a save/);assert.equal(gone.next.who,'主人');
  assert.equal((await run('deja')).errorCode,'INVALID_SCOPE_CONFIGURATION');
- assert.deepEqual((await call('accounts')).scopeConfig,{source:'invalid',error:'INVALID_SCOPE_CONFIGURATION'});
+ // The configuration failure keeps its reason (PG design review #8 step 1).
+ assert.deepEqual((await call('accounts')).scopeConfig,{source:'invalid',error:'INVALID_SCOPE_CONFIGURATION',reason:'configuration and key deleted after a save'});
  assert.equal((await call('settings/read')).source,'invalid');
  assert.equal(fetched,0,'no GitHub request was attempted');
 });
