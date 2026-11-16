@@ -43,6 +43,9 @@ const ERRORS = {
 function say(text, isError) { const el = $('#message'); el.textContent = text || ''; el.className = isError ? 'error' : 'muted'; }
 function explain(result) {
   if (result?.ok) return '';
+  // The worker adds a plain reason and the next step (node/messages.cjs); older answers fall back here.
+  const next = result?.next?.who && result?.next?.action ? ' 下一步（' + result.next.who + '）：' + result.next.action : '';
+  if (typeof result?.message === 'string' && result.message && result?.next) return result.message + next + '（' + result.errorCode + '）';
   const reason = result?.details?.reason ? '（' + result.details.reason + '）' : '';
   return (ERRORS[result?.errorCode] || ('未完成：' + (result?.errorCode || '未知错误'))) + reason;
 }
