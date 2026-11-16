@@ -59,9 +59,9 @@ function fixture(options={}){
   if(options.override){const out=await options.override(p,init,body,git);if(out){if(out.throw)throw Error('network');return reply(out.data,out.status);}}
   if(p==='/app')return reply({id:account.app_id,slug:account.app_slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/x'});
   if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:perms});
-  if(p.endsWith('/access_tokens')){const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:body.permissions};tokenRepositories.set('Bearer '+t.token,listed(body.repositories||INSTALLED));return reply(t);}
+  if(p.endsWith('/access_tokens')){const names=body.repository_ids?body.repository_ids.map(id=>INSTALLED[id-1000]):body.repositories;const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:body.permissions};tokenRepositories.set('Bearer '+t.token,listed(names||INSTALLED));return reply(t);}
   if(p==='/installation/repositories')return reply(tokenRepositories.get(init.headers.Authorization));
-  if(p===ROOT)return reply({default_branch:'main'});
+  if(p===ROOT)return reply({id:1000+INSTALLED.indexOf('MontClip'),name:'MontClip',full_name:'good-night-oppie/MontClip',owner:{login:'good-night-oppie'},default_branch:'main'});
   if(p.startsWith(ROOT+'/git/ref/heads/')){const b=p.slice((ROOT+'/git/ref/heads/').length);return git.refs.has(b)?reply({ref:'refs/heads/'+b,object:{type:'commit',sha:git.refs.get(b)}}):reply({message:'Not Found'},404);}
   if(p.startsWith(ROOT+'/git/commits/')){const c=git.commits.get(p.split('/').pop());return c?reply(c):reply({},404);}
   if(p.startsWith(ROOT+'/git/trees/')&&init.method==='GET'){const sha=p.split('/').pop(),t=git.trees.get(sha);return t?reply({sha,tree:t,truncated:false}):reply({},404);}
@@ -279,7 +279,7 @@ test('every teammate whose installation has contents:write can commit, with a si
   const f=fixture({account});
   const r=await run(f,base(f,{changes:[{path:'a',content_base64:b64('a')}]}),account);
   assert.equal(r.ok,true,account+JSON.stringify(r));
-  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.body),[{repositories:['MontClip'],permissions:{metadata:'read',contents:'write'}}],account);
+  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.body),[{repositories:['MontClip'],permissions:{metadata:'read'}},{repository_ids:[1000],permissions:{metadata:'read',contents:'write'}}],account);
  }
 });
 
@@ -293,7 +293,7 @@ test('commit_files is advertised and treated as a write by the host bridge',()=>
 // Deja 2026-11-16 (#33): files under .github/workflows/ need workflows:write on the token. The
 // token asks for it only when the change touches such a path and the installation holds it.
 const WF_PERMS={contents:'write',issues:'write',pull_requests:'write',metadata:'read',workflows:'write'};
-const tokenRequests=f=>f.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.body?.repositories).map(c=>c.body.permissions);
+const tokenRequests=f=>f.calls.filter(c=>c.path.endsWith('/access_tokens')&&c.body?.repository_ids).map(c=>c.body.permissions);
 test('commit_files touching .github/workflows/ requests workflows:write when the installation has it',async()=>{
  const f=fixture({perms:WF_PERMS});
  const r=await run(f,base(f,{changes:[{path:'.github/workflows/test.yml',content_base64:b64('on: [merge_group]')},{path:'README.md',content_base64:b64('x')}]}));
