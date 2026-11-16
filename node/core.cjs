@@ -138,7 +138,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'get_issue':exact(args,['number']);route=root+'/issues/'+number();break;
     case 'create_issue':body=issuePayload(true);method='POST';route=root+'/issues';break;
     case 'update_issue':body=issuePayload(false);method='PATCH';route=root+'/issues/'+number();break;
-    case 'comment_issue':exact(args,['number','body']);body={body:nonempty(args.body,65000)};method='POST';route=root+'/issues/'+number()+'/comments';break;
+    case 'comment_issue':exact(args,['number','body']);body={body:nonempty(args.body,65000)};method='POST';preflight={kind:'comment',number:number()};route=root+'/issues/'+preflight.number+'/comments';break;
     case 'get_pull':exact(args,['number']);route=root+'/pulls/'+number();break;
     case 'pull_files':case 'list_reviews':{const q=listQuery(args,['number']);route=root+'/pulls/'+number()+(operation==='pull_files'?'/files?':'/reviews?')+q;break;}
     case 'create_pull':exact(args,['title','body','head','base','draft']);body={title:nonempty(args.title,256),body:str(args.body??'',65000),head:ref(args.head),base:ref(args.base),draft:args.draft===undefined?true:args.draft};if(typeof body.draft!=='boolean'||body.head===body.base)bad();method='POST';route=root+'/pulls';break;
@@ -219,7 +219,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     {check:'repository_selection',expected:'selected or all',actual:shown(installation?.repository_selection),ok:['selected','all'].includes(installation?.repository_selection)},
     {check:'suspended',expected:'not suspended',actual:installation?.suspended_at?'suspended':'not suspended',ok:!installation?.suspended_at}]);
    // The installation may hold more than this operation needs (and usually does); only a lack fails.
-   const workflowFiles=workflowPaths(preflight),needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
+   const workflowFiles=workflowPaths(preflight);let needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
    checkInstallation(installation.permissions,account,operation,installationId,needed,workflowFiles);
    // identity also reports the whole installation (an unscoped metadata-only token, bounded listing).
    async function listInstallation(){
@@ -260,6 +260,17 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const tokenIds=[...new Set([...resolved.values()].map(r=>r.id))];
    // Default branch (QQ 5914736615 point 3): refused here, before the execution token and any write.
    if(['branch','file','edit','commit'].includes(preflight?.kind)&&(typeof resolved.get(repo).default_branch!=='string'||resolved.get(repo).default_branch===preflight.branch))bad('DEFAULT_BRANCH_WRITE_REFUSED');
+   // A comment on a pull request (ADR 0003 Amendment 1, PG): GitHub refuses it from a token holding
+   // issues:write only, so when the number is a pull request the token also asks for pull_requests:write.
+   // Checked with a separate metadata + pull_requests:read token for this repository; 404 means an issue.
+   if(preflight?.kind==='comment'&&!missingPermissions(installation.permissions,{pull_requests:'read'}).length){
+    const probePermissions={metadata:'read',pull_requests:'read'};let probeResponse;
+    try{probeResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repository_ids:tokenIds,permissions:probePermissions});}catch(e){notInstalled(e);}
+    const probeToken=validToken(probeResponse);checkTokenPermissions(probeResponse.permissions,probePermissions);
+    let pull=null;try{pull=await api(root+'/pulls/'+preflight.number,probeToken);}catch(e){if(!(e instanceof CoreError&&e.status===404))throw e;}
+    if(pull!==null&&(!obj(pull)||pull.number!==preflight.number))bad('INVALID_API_RESPONSE');
+    if(pull!==null){needed={...needed,pull_requests:'write'};checkInstallation(installation.permissions,account,operation,installationId,needed);}
+   }
    let tokenResponse;
    try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repository_ids:tokenIds,permissions:needed});}catch(e){notInstalled(e);}
    const token=validToken(tokenResponse);checkTokenPermissions(tokenResponse.permissions,needed);
