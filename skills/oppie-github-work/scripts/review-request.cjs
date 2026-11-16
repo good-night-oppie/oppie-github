@@ -281,9 +281,9 @@ var require_repository_policy = __commonJS({
     var SIX = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
     var OPTIONAL_REPOSITORIES = Object.freeze(["cindy"]);
-    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
+    var ACCOUNT_NAMES = Object.freeze(["ad", "bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "comment_review", qq: "review" });
+    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "write", qq: "write" });
     var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
     var REVIEW_OPERATIONS = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]);
     function repositoryRestriction(account, repo) {
@@ -314,7 +314,7 @@ var require_repository_policy = __commonJS({
       return Object.freeze(selected);
     }
     function baseline(account) {
-      return { installation: CATALOG, execution: account === "reviewinbox" ? TWO : CINDY_EXECUTION.includes(account) ? CATALOG : SIX };
+      return { installation: CATALOG, execution: CATALOG };
     }
     function sameMap(a, b) {
       return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
@@ -356,8 +356,9 @@ var require_core = __commonJS({
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
-    var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
+    var APP_NAMES = Object.freeze({ ad: "ADOppieXYZ", bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
+      ["ad", 5764947, 182084517],
       ["bb", 5665927, 179806310],
       ["cindy", 5665939, 179806330],
       ["deja", 5665940, 179806356],
@@ -439,7 +440,7 @@ var require_core = __commonJS({
       return n;
     }
     function permissions(a, operation) {
-      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
     function checkPermissions(actual, a, phase = "execution", operation) {
       const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
@@ -537,11 +538,6 @@ var require_core = __commonJS({
           const repo = repoName(input2.repo, expectedRepos);
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
-          if (account.account === "reviewinbox") {
-            if (["create_branch", "update_file", "edit_file", "commit_files"].includes(operation)) bad("READ_ONLY_CONTENTS");
-            if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
-            if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
-          }
           const restriction = repositoryRestriction(account.account, repo);
           if (restriction) {
             if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
@@ -1064,8 +1060,8 @@ var require_store = __commonJS({
     var { promisify } = require("node:util");
     var runFile = promisify(execFile);
     var { ACCOUNTS, allowedAppSlug } = require_core();
-    var APP_IDS = { bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", reviewinbox: "5687106" };
-    var INSTALL_IDS = { bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", reviewinbox: "180305629" };
+    var APP_IDS = { ad: "5764947", bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", reviewinbox: "5687106" };
+    var INSTALL_IDS = {ad: "182084517", bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", reviewinbox: "180305629" };
     var MAX_PEM = 32768;
     var MAX_STORE = 1048576;
     function failure(code) {
@@ -1353,6 +1349,7 @@ var require_deployment = __commonJS({
   "deployment.json"(exports2, module2) {
     module2.exports = {
       accounts: [
+        "ad",
         "bb",
         "cindy",
         "deja",
