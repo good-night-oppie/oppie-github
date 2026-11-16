@@ -39,6 +39,7 @@ function fixture(options={}){
   }
   else if(path==='/installation/repositories'){const t=tokenRepositories.get(init.headers.Authorization);data=options.repositories&&t&&!t.probe?options.repositories:t?.list;}
   else if(path.endsWith('/pulls/7'))data={number:7,head:{sha:options.head||SHA},state:'open',draft:!!options.draft};
+  else if(/[/]pulls[/][0-9]+$/.test(path)&&init.method==='GET')return {ok:false,status:404,text:async()=>'{}'};
   else if(/^\/repos\/good-night-oppie\/[^/]+$/.test(path)){const name=path.split('/').pop();if(!INSTALLED.includes(name))return {ok:false,status:404,text:async()=>'{}'};data={id:1000+INSTALLED.indexOf(name),name,full_name:'good-night-oppie/'+name,owner:{login:'good-night-oppie'},default_branch:'main'};}
   else data={id:1,html_url:'https://github.com/good-night-oppie/MontClip/issues/1',body:'normal result'};
   return {ok:status===200,status,text:async()=>JSON.stringify(data)};
@@ -230,7 +231,7 @@ test('failed credential provider does not expose error content',async()=>{
 test('QQ is not boxed in: comment, branch and file writes work when its installation allows them',async()=>{
  for(const [operation,args] of [['comment_issue',{number:1,body:'QQ note'}],['create_issue',{title:'t'}],['create_branch',{branch:'qq/x',sha:SHA}],['identity',{}]]){
   const f=fixture({account:'qq'});const r=await f.client.run(input(operation,args,'qq'));assert.equal(r.ok,true,operation+' '+r.errorCode);
-  assert.deepEqual(executionTokens(f.calls)[0],{repositories:['MontClip'],permissions:{metadata:'read',...OPERATION_NEEDS[operation]}},operation);
+  assert.deepEqual(executionTokens(f.calls).at(-1),{repositories:['MontClip'],permissions:{metadata:'read',...OPERATION_NEEDS[operation]}},operation);
  }
  const narrow=fixture({account:'qq',permissions:{metadata:'read',pull_requests:'write',administration:'write'}});
  assert.equal((await narrow.client.run(input('comment_issue',{number:1,body:'x'},'qq'))).errorCode,'INSTALLATION_PERMISSION_MISSING');
@@ -294,6 +295,7 @@ test('AD real shape: comments and reviews (COMMENT, APPROVE, REQUEST_CHANGES) wi
   const r=await f.client.run(input('submit_review',{number:7,commit_id:SHA,event,body:'AD '+event},'ad','MontClip'));assert.equal(r.ok,true,event+' '+r.errorCode);
  }
  assert.deepEqual(executionTokens(f.calls),[
+  {repositories:['oppie-github'],permissions:{metadata:'read',pull_requests:'read'}},
   {repositories:['oppie-github'],permissions:{metadata:'read',issues:'write'}},
   ...['COMMENT','APPROVE','REQUEST_CHANGES'].map(()=>({repositories:['MontClip'],permissions:{metadata:'read',pull_requests:'write'}})),
  ]);
@@ -550,7 +552,7 @@ test('update_file to the default branch is refused before any file read or write
 // token is requested by that ID and must cover exactly that repository.
 test('repository ID: the name is resolved with a metadata-only token, the execution token is requested by ID only',async()=>{
  const f=fixture({account:'deja'});
- const r=await f.client.run(input('comment_issue',{number:1,body:'x'},'deja','oppie-github'));
+ const r=await f.client.run(input('create_issue',{title:'x'},'deja','oppie-github'));
  assert.equal(r.ok,true,JSON.stringify(r));
  const grants=f.calls.filter(c=>c.path.endsWith('/access_tokens')).map(c=>c.parsed);
  assert.deepEqual(grants,[{repositories:['oppie-github'],permissions:{metadata:'read'}},{repository_ids:[1000+INSTALLED.indexOf('oppie-github')],permissions:{metadata:'read',issues:'write'}}]);
@@ -599,4 +601,29 @@ test('admin_update without a host confirmation is refused before the key, for ev
  assert.equal(r.ok,true,JSON.stringify(r));
  assert.deepEqual(executionTokens(ok.calls).map(t=>t.permissions),[{metadata:'read',administration:'write'}]);
  assert.equal(ok.calls.filter(c=>c.method==='PATCH').length,1);
+});
+// ADR 0003 Amendment 1 (PG): a comment on a pull request needs pull_requests:write; GitHub answers 403
+// to a token holding issues:write only (seen on #33 and #36 with settings.8-11).
+test('comment on a pull request: the token adds pull_requests:write; on an issue it stays issues:write',async()=>{
+ const pr=fixture({account:'deja',override:(path,init)=>path==='/repos/good-night-oppie/oppie-github/pulls/33'&&init.method==='GET'?{status:200,data:{number:33}}:null});
+ const r=await pr.client.run(input('comment_issue',{number:33,body:'x'},'deja','oppie-github'));assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(executionTokens(pr.calls),[{repositories:['oppie-github'],permissions:{metadata:'read',pull_requests:'read'}},{repositories:['oppie-github'],permissions:{metadata:'read',issues:'write',pull_requests:'write'}}]);
+ assert.ok(pr.calls.findIndex(c=>c.path.endsWith('/pulls/33'))<pr.calls.findIndex(c=>c.method==='POST'&&c.path.endsWith('/issues/33/comments')),'checked before the comment');
+ const issue=fixture({account:'deja'});
+ assert.equal((await issue.client.run(input('comment_issue',{number:8,body:'x'},'deja','oppie-github'))).ok,true);
+ assert.deepEqual(executionTokens(issue.calls).at(-1),{repositories:['oppie-github'],permissions:{metadata:'read',issues:'write'}});
+});
+test('comment on a pull request without pull_requests:write in the installation says what is missing, before the execution token',async()=>{
+ const f=fixture({account:'deja',permissions:{metadata:'read',issues:'write',pull_requests:'read'},override:(path,init)=>path.endsWith('/pulls/33')&&init.method==='GET'?{status:200,data:{number:33}}:null});
+ const r=await f.client.run(input('comment_issue',{number:33,body:'x'},'deja','oppie-github'));
+ assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.deepEqual(r.details.missing,[{permission:'pull_requests',required:'write',installed:'read'}]);
+ assert.equal(executionTokens(f.calls).some(t=>t.permissions.issues),false);assert.equal(f.calls.some(c=>c.method==='POST'&&c.path.includes('/comments')),false);
+});
+test('comment: no pull request check when the installation cannot read pull requests; a malformed answer is refused',async()=>{
+ const f=fixture({account:'deja',permissions:{metadata:'read',issues:'write'}});
+ assert.equal((await f.client.run(input('comment_issue',{number:8,body:'x'},'deja','oppie-github'))).ok,true);
+ assert.equal(f.calls.some(c=>c.path.includes('/pulls/')),false);assert.deepEqual(executionTokens(f.calls),[{repositories:['oppie-github'],permissions:{metadata:'read',issues:'write'}}]);
+ const bad=fixture({account:'deja',override:(path,init)=>path.endsWith('/pulls/9')&&init.method==='GET'?{status:200,data:{number:10}}:null});
+ const r=await bad.client.run(input('comment_issue',{number:9,body:'x'},'deja','oppie-github'));
+ assert.equal(r.errorCode,'INVALID_API_RESPONSE');assert.equal(bad.calls.some(c=>c.method==='POST'&&c.path.includes('/comments')),false);
 });
