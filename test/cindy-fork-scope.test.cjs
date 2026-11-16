@@ -26,7 +26,7 @@ function fixture(account,{installed=rows(SEVEN)}={}){
   const u=new URL(url),route=u.pathname,method=init.method||'GET',body=init.body?JSON.parse(init.body):null;calls.push({route,body,method});let data,status=200;
   if(route==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',permissions:installPermissions};
-  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?permissions:{metadata:'read'}};}
+  else if(route.endsWith('/access_tokens')){requested=body.repository_ids;data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:body.repository_ids?body.permissions:{metadata:'read'}};}
   // The execution token sees exactly the catalog repositories it was minted for.
   else if(route==='/installation/repositories')data=init.headers.Authorization==='Bearer probe'?installed:rows(Object.fromEntries(Object.entries(SEVEN).filter(([,id])=>requested.includes(id))));
   else if(/^\/repos\/good-night-oppie\/[^/]+$/.test(route)&&method==='GET')data={default_branch:'main'};
@@ -101,7 +101,7 @@ for(const [account,execution] of Object.entries(DESIGN)){
    assert.equal(r.result.installationRepositories.length,7);
    assert.deepEqual(r.result.repositories.map(x=>x.id),Object.values(execution));
    const mint=f.calls.filter(c=>c.route.endsWith('/access_tokens')).at(-1).body;
-   assert.deepEqual(mint,{repository_ids:Object.values(execution),permissions:TOKEN_PERMISSIONS(account)});
+   assert.deepEqual(mint,{repository_ids:Object.values(execution),permissions:{...TOKEN_PERMISSIONS(account),contents:'read'}});
   }
  });
  test(account+' negative: repositories outside its set and the upstream are refused before credentials',async()=>{
