@@ -232,5 +232,5 @@ test('settings page checks for and removes a leftover key copy before loading',(
 });
 test('manifest whenToUse states the current ReviewInbox review events (owner decision 2026-11-15)',()=>{
  const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../ghost.json'),'utf8'));
- assert.oj(!m.whenToUse.includes('仅作 COMMENT'));assert.match(m.whenToUse,/APPROVE/);
+ assert.ok(!m.whenToUse.includes('仅作 COMMENT'));assert.match(m.whenToUse,/APPROVE/);
 });
