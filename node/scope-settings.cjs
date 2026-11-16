@@ -33,16 +33,20 @@ function summarize(before,after){
  const impact=n=>{
   const active=after.accounts;
   const writers=active.filter(a=>!repositoryRestriction(a,n,after)&&a!=='qq');
-  const readers=active.filter(a=>repositoryRestriction(a,n,after));
-  return n+'#'+after.repositories[n]+'（'+writers.length+' 个账号可写'+(writers.length?'：'+writers.join(','):'')+(readers.length?'；只读评审：'+readers.join(','):'')+(active.includes('qq')&&!repositoryRestriction('qq',n,after)?'；qq 含规则集/驳回/合并队列/仓库设置等专属操作':'')+'；未写入角色表的账号按自身角色）';
+  const blocked=active.filter(a=>repositoryRestriction(a,n,after)?.none);
+  const readers=active.filter(a=>{const r=repositoryRestriction(a,n,after);return r&&!r.none;});
+  return n+'#'+after.repositories[n]+'（'+writers.length+' 个账号可写'+(writers.length?'：'+writers.join(','):'')+(readers.length?'；只读评审：'+readers.join(','):'')+(blocked.length?'；不可用：'+blocked.join(','):'')+(active.includes('qq')&&!repositoryRestriction('qq',n,after)?'；qq 含规则集/驳回/合并队列/仓库设置等专属操作':'')+'；未写入角色表的账号按自身角色）';
  };
  if(repoAdd.length)parts.push('加仓库 '+repoAdd.map(x=>impact(x.split('#')[0])).join(','));
  if(repoDel.length)parts.push('删仓库 '+repoDel.join(','));
  const optAdd=after.optionalRepositories.filter(n=>!before.optionalRepositories.includes(n)),optDel=before.optionalRepositories.filter(n=>!after.optionalRepositories.includes(n));
  if(optAdd.length)parts.push('设为可选 '+optAdd.join(','));
  if(optDel.length)parts.push('设为必需 '+optDel.join(','));
- const roleText={write:'可写名单内全部仓库',review:'只读+评审',comment_review:'只读+仅 COMMENT'};
- const accDesc=n=>{const a=after.newAccounts[n];return a?n+'(App '+a.appId+'/安装 '+a.installationId+'/'+a.appSlug+'/'+roleText[a.role]+(a.operations?'/'+a.operations.length+'项操作':'')+')':n;};
+ const roleText={write:'可写名单内全部仓库',reviewer:'只读+评论+评审',review:'只读+评审',comment_review:'只读+仅 COMMENT'};
+ // BB/Deja (#29 vs #33): the card states whether the App's broader installation is accepted and
+ // which repositories the account cannot use (e.g. cindy for AD), as the owner chose them.
+ const blockedFor=n=>Object.keys(after.repositoryRoles).filter(r=>after.repositoryRoles[r][n]==='none');
+ const accDesc=n=>{const a=after.newAccounts[n];if(!a)return n;const b=blockedFor(n);return n+'(App '+a.appId+'/安装 '+a.installationId+'/'+a.appSlug+'/'+roleText[a.role]+(a.operations?'/'+a.operations.length+'项操作':'')+(a.allowBroaderInstallation?'/安装权限可更宽':'')+'/'+(b.length?'不可用 '+b.join(','):'全部仓库可用')+')';};
  const accAdd=after.accounts.filter(n=>!before.accounts.includes(n)),accDel=before.accounts.filter(n=>!after.accounts.includes(n));
  const accChanged=Object.keys(after.newAccounts).filter(n=>before.accounts.includes(n)&&after.accounts.includes(n)&&canonical(before.newAccounts[n]??null)!==canonical(after.newAccounts[n]));
  if(accAdd.length)parts.push('加账号 '+accAdd.map(accDesc).join(','));
