@@ -17,7 +17,7 @@ function fixture({invalid=false}={}){
   if(name==='./scope-config.cjs')return require('../node/scope-config.cjs');
   if(name==='./scope-settings.cjs')return require('../node/scope-settings.cjs');
   if(name==='./scope-loader.cjs')return require('../node/scope-loader.cjs');
-  if(name==='./store.cjs')return {setAccountResolver:()=>{},paths:{root:'synthetic-store'},list:async()=>[],load:async()=>({privateKey:'synthetic'}),importKey:async input=>{saves++;imports.push(input);return {fingerprint:'fingerprint'};}};
+  if(name==='./store.cjs')return {setAccountResolver:()=>{},readPrivate:async()=>null,paths:{root:'synthetic-store'},list:async()=>[],load:async()=>({privateKey:'synthetic'}),importKey:async input=>{saves++;imports.push(input);return {fingerprint:'fingerprint'};}};
   if(name==='./core.cjs')return {configuredAccount:n=>({account:n}),ACCOUNTS:{deja:{},qq:{}},createClient:options=>{clients.push(options);return {run:async input=>{const snapshot=options.repositoryPolicy?.();calls.push({input,snapshot});if(!snapshot?.accounts?.[input.account]?.execution?.[input.repo])return {ok:false,errorCode:'WRONG_RUNTIME_POLICY'};return {ok:true,result:{app_slug:'synthetic'}};}};}};
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
   if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>({ok:false}),stop:async()=>({ok:true})})};
