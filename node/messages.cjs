@@ -241,7 +241,14 @@ function specifics(code,d){
  if(typeof d.reason==='string'&&d.reason)return '原因：'+clip(d.reason)+'。';
  return '';
 }
+// A successful call can carry warnings (ADR 0003 Amendment 1: a slug that differs from the configured
+// one does not stop the account). Only the public slugs are shown.
+function warningText(w){
+ if(w?.check==='app_slug')return 'GitHub 上这个 App 的 slug 是 '+clip(w.actual)+'，配置里记的是 '+clip(w.expected)+'。身份按 App ID 核对，这次照常执行；请主人确认 App 是否改过名，需要时在设置页更新。';
+ return '注意：'+clip(w?.check)+' 与配置不一致（应为 '+clip(w?.expected)+'，GitHub 返回 '+clip(w?.actual)+'）。';
+}
 function explain(result){
+ if(result&&typeof result==='object'&&result.ok===true&&Array.isArray(result.receipt?.warnings)&&result.receipt.warnings.length)return {...result,warning:result.receipt.warnings.slice(0,5).map(warningText).join(' ')};
  if(!result||typeof result!=='object'||result.ok!==false||typeof result.errorCode!=='string')return result;
  const entry=entryFor(result.errorCode),extra=specifics(result.errorCode,result.details);
  const message=result.errorCode==='INSTALLATION_PERMISSION_MISSING'&&extra?extra:entry.why+extra;
