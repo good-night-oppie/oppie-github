@@ -23,12 +23,17 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
 // Accounts added through the owner's scope configuration (e.g. AD) get the same pinned shape
 // as compiled accounts: App ID, installation ID and slugs come from the file, never from GitHub.
 // They are never admin and never QQ. Compiled accounts cannot be redefined by configuration.
+// Operations that need contents:write on the execution token.
+const CONTENT_WRITE_OPERATIONS=Object.freeze(['create_branch','update_file','edit_file','commit_files']);
 function configuredAccount(name,config=DEFAULT_CONFIG){
  if(typeof name!=='string'||!config.accounts.includes(name))return null;
  if(Object.hasOwn(ACCOUNTS,name))return ACCOUNTS[name];
  const a=Object.hasOwn(config.newAccounts,name)?config.newAccounts[name]:null;if(!a)return null;
  const slug=a.appSlug||a.appName.toLowerCase();
- return Object.freeze({account:name,app_id:a.appId,installation_id:a.installationId,app_name:a.appName,app_slug:slug,app_slug_status:'expected_not_live',allowed_slugs:Object.freeze([...new Set([slug,'oppie-agent-'+name])]),admin:false,configured:true,operations:a.operations||null});
+ // QQ (#28): an account that can never write repository contents gets contents:read tokens.
+ const mayWrite=a.role==='write'||Object.values(config.repositoryRoles).some(t=>t[name]==='write');
+ const contentsWrite=mayWrite&&(!a.operations||a.operations.some(o=>CONTENT_WRITE_OPERATIONS.includes(o)));
+ return Object.freeze({account:name,app_id:a.appId,installation_id:a.installationId,app_name:a.appName,app_slug:slug,app_slug_status:'expected_not_live',allowed_slugs:Object.freeze([...new Set([slug,'oppie-agent-'+name])]),admin:false,configured:true,role:a.role,operations:a.operations||null,contents_write:contentsWrite,allow_broader_installation:a.allowBroaderInstallation===true});
 }
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
@@ -47,12 +52,14 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 // #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
 // write) requests contents:write, which the QQ installation already holds.
-function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':a.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+function permissions(a,operation){return {contents:a.configured?(a.contents_write?'write':'read'):a.account==='qq'&&operation==='enqueue_pull'?'write':a.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
 function checkPermissions(actual,a,phase='execution',operation){
  const expected=permissions(a,operation),rank={none:0,read:1,write:2};
  // PG may have additional owner-granted installation permissions. Never request
  // or accept them on its ordinary execution token; QQ's existing rules stay unchanged.
- const pgInstallation=phase==='installation'&&a.account==='pg';
+ // A configured account may accept the same for its installation when the owner allows it
+ // (allowBroaderInstallation, e.g. AD); its execution token is still compared exactly.
+ const pgInstallation=phase==='installation'&&(a.account==='pg'||a.configured===true&&a.allow_broader_installation===true);
  const allowSuperset=a.account==='qq'||pgInstallation;
  if(pgInstallation&&(!obj(actual)||Object.keys(expected).some(k=>typeof actual[k]!=='string'||!Object.hasOwn(rank,actual[k]))))bad('PERMISSION_MISMATCH');
  if(!obj(actual)||Object.entries(expected).some(([k,v])=>allowSuperset?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(!allowSuperset&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');
@@ -98,6 +105,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    // Repository restrictions supplement global account guards.
    const restriction=repositoryRestriction(account.account,repo,config);
    if(restriction){
+    if(restriction.none)bad('REPOSITORY_NOT_ALLOWED');
     if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
     if(restriction.commentOnly&&operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
    }
