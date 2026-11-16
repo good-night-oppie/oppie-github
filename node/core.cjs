@@ -10,6 +10,11 @@ const {initialPolicy,validatePolicy,repositoryRestriction,OPTIONAL_REPOSITORIES}
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
 const QQ_ONLY=['list_rulesets','get_ruleset','ruleset_update','dismiss_review','enqueue_pull'];
 const QQ_ALLOWED=['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review',...QQ_ONLY];
+// #30: request_reviewers exists only so team PRs pass MontClip's sop-pr-lint reviewer check. The
+// reviewer list is fixed here (exact case) and only implementation accounts that open PRs may use it;
+// review accounts (dd, qq) and reviewinbox are refused before any key is read.
+const REVIEWER_ALLOWLIST=Object.freeze(['GoodNightOppie']);
+const REVIEWER_REQUEST_ACCOUNTS=Object.freeze(['bb','cindy','deja','gg','jj','pg','rea','video','vv']);
 const APP_NAMES=Object.freeze({bb:'BBOppieXYZ',cindy:'CindyOppieXYZ',deja:'DejaOppieXYZ',dd:'DDOppieXYZ',gg:'GGOppieXYZ',jj:'JJOppieXYZ',pg:'PGOppieXYZ',qq:'QQOppieXYZ',rea:'ReaOppieXYZ',video:'VideoOppieXYZ',vv:'VVOppieXYZ',reviewinbox:'ReviewInboxOppieXYZ'});
 const ACCOUNTS = Object.freeze(Object.fromEntries([
  ['bb',5665927,179806310],['cindy',5665939,179806330],['deja',5665940,179806356],
@@ -21,7 +26,7 @@ const ACCOUNTS = Object.freeze(Object.fromEntries([
  allowed_slugs:Object.freeze(account==='reviewinbox'?['reviewinboxoppiexyz']:['oppie-agent-'+account,APP_NAMES[account].toLowerCase()]),admin:account==='qq'})])));
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
-const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','commit_files','admin_get','admin_update',...QQ_ONLY]);
+const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','request_reviewers','list_reviews','submit_review','create_branch','update_file','edit_file','commit_files','admin_get','admin_update',...QQ_ONLY]);
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
@@ -76,6 +81,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const account=ACCOUNTS[input.account];const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
+   if(operation==='request_reviewers'&&!REVIEWER_REQUEST_ACCOUNTS.includes(account.account))bad('REVIEWER_REQUEST_ACCOUNT_REFUSED');
    let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
    const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
    // Repository restrictions supplement global account guards.
@@ -102,6 +108,14 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'pull_files':case 'list_reviews':{const q=listQuery(args,['number']);route=root+'/pulls/'+number()+(operation==='pull_files'?'/files?':'/reviews?')+q;break;}
     case 'create_pull':exact(args,['title','body','head','base','draft']);body={title:nonempty(args.title,256),body:str(args.body??'',65000),head:ref(args.head),base:ref(args.base),draft:args.draft===undefined?true:args.draft};if(typeof body.draft!=='boolean'||body.head===body.base)bad();method='POST';route=root+'/pulls';break;
     case 'update_pull':exact(args,['number','title','body','state']);body={};if(args.title!==undefined)body.title=nonempty(args.title,256);if(args.body!==undefined)body.body=str(args.body,65000);if(args.state!==undefined){if(!['open','closed'].includes(args.state))bad();body.state=args.state;}if(!Object.keys(body).length)bad();method='PATCH';route=root+'/pulls/'+number();break;
+    case 'request_reviewers':{
+     // Only the reviewers field is ever sent: no team_reviewers, no removal (DELETE), no other PR field.
+     exact(args,['number','reviewers']);
+     if(!Array.isArray(args.reviewers)||!args.reviewers.length)bad('REVIEWERS_REQUIRED');
+     if(args.reviewers.some(r=>typeof r!=='string'||!REVIEWER_ALLOWLIST.includes(r)))bad('REVIEWER_NOT_ALLOWED');
+     if(new Set(args.reviewers).size!==args.reviewers.length)bad('DUPLICATE_REVIEWER');
+     body={reviewers:[...args.reviewers]};method='POST';route=root+'/pulls/'+number()+'/requested_reviewers';break;
+    }
     case 'submit_review':{
      exact(args,['number','commit_id','event','body','comments']);if(!['COMMENT','APPROVE','REQUEST_CHANGES'].includes(args.event))bad();
      body={commit_id:sha(args.commit_id),event:args.event,body:str(args.body??'',65000)};
@@ -262,4 +276,4 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
  }
  return {run};
 }
-module.exports={createClient,makeJwt,ACCOUNTS,APP_NAMES,allowedAppSlug,knownBotLogin,REPOSITORIES,OPERATION_NAMES,CoreError};
+module.exports={createClient,makeJwt,ACCOUNTS,APP_NAMES,allowedAppSlug,knownBotLogin,REPOSITORIES,OPERATION_NAMES,REVIEWER_ALLOWLIST,REVIEWER_REQUEST_ACCOUNTS,CoreError};

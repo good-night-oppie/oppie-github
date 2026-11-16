@@ -357,6 +357,8 @@ var require_core = __commonJS({
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
+    var REVIEWER_ALLOWLIST = Object.freeze(["GoodNightOppie"]);
+    var REVIEWER_REQUEST_ACCOUNTS = Object.freeze(["bb", "cindy", "deja", "gg", "jj", "pg", "rea", "video", "vv"]);
     var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
       ["bb", 5665927, 179806310],
@@ -387,7 +389,7 @@ var require_core = __commonJS({
     function knownBotLogin(account, login) {
       return typeof login === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.some((slug) => login === slug + "[bot]");
     }
-    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "commit_files", "admin_get", "admin_update", ...QQ_ONLY]);
+    var OPERATION_NAMES = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "create_issue", "update_issue", "comment_issue", "list_pulls", "get_pull", "pull_files", "create_pull", "update_pull", "request_reviewers", "list_reviews", "submit_review", "create_branch", "update_file", "edit_file", "commit_files", "admin_get", "admin_update", ...QQ_ONLY]);
     var CoreError = class extends Error {
       constructor(code, execution = "not_executed", status, details) {
         super(code);
@@ -529,6 +531,7 @@ var require_core = __commonJS({
           if (!OPERATION_NAMES.includes(operation)) bad("UNKNOWN_OPERATION");
           if (account.account === "qq" && !QQ_ALLOWED.includes(operation)) bad("QQ_AUTHORING_REFUSED");
           if (QQ_ONLY.includes(operation) && account.account !== "qq") bad("QQ_ACCOUNT_REQUIRED");
+          if (operation === "request_reviewers" && !REVIEWER_REQUEST_ACCOUNTS.includes(account.account)) bad("REVIEWER_REQUEST_ACCOUNT_REFUSED");
           let policy;
           try {
             policy = validatePolicy(repositoryPolicy());
@@ -632,6 +635,16 @@ var require_core = __commonJS({
               method = "PATCH";
               route = root + "/pulls/" + number();
               break;
+            case "request_reviewers": {
+              exact(args, ["number", "reviewers"]);
+              if (!Array.isArray(args.reviewers) || !args.reviewers.length) bad("REVIEWERS_REQUIRED");
+              if (args.reviewers.some((r) => typeof r !== "string" || !REVIEWER_ALLOWLIST.includes(r))) bad("REVIEWER_NOT_ALLOWED");
+              if (new Set(args.reviewers).size !== args.reviewers.length) bad("DUPLICATE_REVIEWER");
+              body = { reviewers: [...args.reviewers] };
+              method = "POST";
+              route = root + "/pulls/" + number() + "/requested_reviewers";
+              break;
+            }
             case "submit_review": {
               exact(args, ["number", "commit_id", "event", "body", "comments"]);
               if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(args.event)) bad();
@@ -886,7 +899,7 @@ var require_core = __commonJS({
       }
       return { run };
     }
-    module2.exports = { createClient: createClient2, makeJwt, ACCOUNTS, APP_NAMES, allowedAppSlug, knownBotLogin, REPOSITORIES, OPERATION_NAMES, CoreError };
+    module2.exports = { createClient: createClient2, makeJwt, ACCOUNTS, APP_NAMES, allowedAppSlug, knownBotLogin, REPOSITORIES, OPERATION_NAMES, REVIEWER_ALLOWLIST, REVIEWER_REQUEST_ACCOUNTS, CoreError };
   }
 });
 

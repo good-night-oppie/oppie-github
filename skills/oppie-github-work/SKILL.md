@@ -39,6 +39,10 @@ Report repository names and the difference, never tokens or private keys. Do not
 
 For automatic review work, follow the installed manual's queue claim/finish protocol and COMMENT-only restrictions. Resolve author notifications from verified current task ownership; never guess a partner from a bot login or signature.
 
+## Requesting the GoodNightOppie reviewer
+
+`request_reviewers` `{number, reviewers:["GoodNightOppie"]}` only adds GoodNightOppie (exact case) as a requested reviewer, the reviewer MontClip's sop-pr-lint expects. No team reviewers, no removal, no other PR fields. Only bb, cindy, deja, gg, jj, pg, rea, video and vv may use it; dd, qq and reviewinbox are refused before credentials. On an unknown outcome, read the PR back before repeating.
+
 ## Bounded editing of an existing file
 
 Discover the live operations first. When edit_file is available, send one small request containing the GitHub path, branch, current Git blob SHA (expected_sha), SHA-256 of the exact intended UTF-8 result (expected_result_sha256), commit message, and edits [{old_text,new_text}]. Both hashes are mandatory. old_text must match exactly once in the current intermediate text; edits run sequentially. Empty new_text deletes the matched text. There are at most 100 edits.
