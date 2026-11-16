@@ -1,4 +1,10 @@
-# ReviewInbox installation/execution split candidate
+> Candidate update 2026-11-14: all accounts retain seven repositories. DD and QQ inherit their original repository operation boundaries on cindy. Global account guards remain. ReviewInbox now has ordinary read/write and review permissions on all seven repositories. This notice supersedes older fork-specific DD/QQ restrictions below.
+
+# ReviewInbox repository scope
+
+**Current (user authorization 2026-11-14, 1.5.0-preview.8-seven-roles.1):** ReviewInbox installation and execution scopes are both the seven repositories (original six plus good-night-oppie/cindy). It has ordinary contents/issues/pull_requests write, metadata read and standard review operations; administrative operations remain unavailable. The automatic review queue remains a separate MontClip/MontClip-Cindy configuration and is not enabled by this change. The six/two split described below is historical and superseded.
+
+## Historical: installation/execution split candidate (superseded 2026-11-14)
 
 This narrow recovery candidate validates the exact six-repository installation, while operation targets, execution token repository_ids, and token-returned repository set remain exactly MontClip/MontClip-Cindy. App5687106/installation180305629, contents/metadata read, issues/pull_requests write and COMMENT-only remain unchanged. No other account scope is widened here.
 

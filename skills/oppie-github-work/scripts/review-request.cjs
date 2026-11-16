@@ -283,7 +283,7 @@ var require_repository_policy = __commonJS({
     var OPTIONAL_REPOSITORIES = Object.freeze(["cindy"]);
     var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
-    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "comment_review", qq: "review" });
+    var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "write", qq: "write" });
     var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
     var REVIEW_OPERATIONS = Object.freeze(["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review"]);
     function repositoryRestriction(account, repo) {
@@ -314,7 +314,7 @@ var require_repository_policy = __commonJS({
       return Object.freeze(selected);
     }
     function baseline(account) {
-      return { installation: CATALOG, execution: account === "reviewinbox" ? TWO : CINDY_EXECUTION.includes(account) ? CATALOG : SIX };
+      return { installation: CATALOG, execution: CATALOG };
     }
     function sameMap(a, b) {
       return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
@@ -351,6 +351,7 @@ var require_core = __commonJS({
     var { validateEdits, applyEdits, MAX_FILE_BYTES } = require_file_edit();
     var commitFilesModule = require_commit_files();
     var MAX_OPERATION_BYTES = 261120;
+    var MAX_INSTALLATION_PAGES = 10;
     var OWNER = "good-night-oppie";
     var { initialPolicy, validatePolicy, repositoryRestriction, OPTIONAL_REPOSITORIES } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
@@ -439,7 +440,7 @@ var require_core = __commonJS({
       return n;
     }
     function permissions(a, operation) {
-      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : ["reviewinbox", "qq"].includes(a.account) ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
     function checkPermissions(actual, a, phase = "execution", operation) {
       const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
@@ -511,8 +512,10 @@ var require_core = __commonJS({
             if (!Array.isArray(r?.repositories) || r.total_count !== r.repositories.length) return null;
             const ids = /* @__PURE__ */ new Set(), names = [];
             for (const x of r.repositories) {
-              if (!obj(x) || typeof x.name !== "string" || x.full_name !== OWNER + "/" + x.name || !Object.hasOwn(expected, x.name) || expected[x.name] !== x.id || ids.has(x.id)) return null;
+              if (!obj(x) || typeof x.name !== "string" || x.full_name !== OWNER + "/" + x.name || !Number.isSafeInteger(x.id) || ids.has(x.id)) return null;
               ids.add(x.id);
+              if (!Object.hasOwn(expected, x.name)) continue;
+              if (expected[x.name] !== x.id) return null;
               names.push(x.name);
             }
             if (Object.keys(expected).some((n) => !OPTIONAL_REPOSITORIES.includes(n) && !names.includes(n))) return null;
@@ -537,11 +540,6 @@ var require_core = __commonJS({
           const repo = repoName(input2.repo, expectedRepos);
           const args = input2.args === void 0 ? {} : input2.args;
           if (!obj(args)) bad();
-          if (account.account === "reviewinbox") {
-            if (["create_branch", "update_file", "edit_file", "commit_files"].includes(operation)) bad("READ_ONLY_CONTENTS");
-            if (["admin_get", "admin_update"].includes(operation)) bad("ADMIN_ACCOUNT_REQUIRED");
-            if (operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
-          }
           const restriction = repositoryRestriction(account.account, repo);
           if (restriction) {
             if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
@@ -778,12 +776,24 @@ var require_core = __commonJS({
           const app = await api("/app", jwt);
           if (Number(app?.id) !== account.app_id || !allowedAppSlug(account.account, app?.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
           const installation = await api("/app/installations/" + account.installation_id, jwt);
-          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || installation?.repository_selection !== "selected" || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
+          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
           checkPermissions(installation.permissions, account, "installation");
           const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
-          const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
+          async function listInstallation(token2) {
+            const repositories = [];
+            let total = null;
+            for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
+              const r = await api("/installation/repositories?per_page=100" + (page > 1 ? "&page=" + page : ""), token2);
+              if (!obj(r) || !Number.isSafeInteger(r.total_count) || !Array.isArray(r.repositories) || total !== null && r.total_count !== total) return { total_count: -1, repositories };
+              total = r.total_count;
+              repositories.push(...r.repositories);
+              if (repositories.length >= total || !r.repositories.length) break;
+            }
+            return { total_count: total, repositories };
+          }
+          const probe = await listInstallation(probeResponse.token);
           const optionalPresent = installedOptional(probe, scope.installation);
           if (optionalPresent === null) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
           const effectiveRepos = Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n]) => !OPTIONAL_REPOSITORIES.includes(n) || optionalPresent.includes(n))));
@@ -866,7 +876,7 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.filter((r) => Object.hasOwn(scope.installation, r.name)).map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositorySelection: installation.repository_selection, installationRepositoryCount: probe.repositories.length, scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
