@@ -141,7 +141,7 @@ test('ReviewInbox identity and review use the installation it has',async()=>{
 });
 
 test('administration follows the installation: missing it fails before any token, for every account',async()=>{
- const f=fixture({account:'reviewinbox'});
+ const f=fixture({account:'reviewinbox',authorize:async()=>true});
  for(const operation of ['admin_get','admin_update']){
   const r=await f.client.run(input(operation,operation==='admin_update'?{allow_squash_merge:true}:{},'reviewinbox'));
   assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.deepEqual(r.details.missing,[{permission:'administration',required:operation==='admin_get'?'read':'write',installed:'none'}]);
@@ -322,7 +322,9 @@ test('AD real shape: only one good-night-oppie installation is accepted',async()
 test('AD real shape: default branch, force and administration stay refused or follow the installation',async()=>{
  const f=fixture({account:'ad',permissions:AD_BROAD});
  assert.equal((await f.client.run(input('create_branch',{branch:'main',sha:SHA},'ad'))).errorCode,'DEFAULT_BRANCH_WRITE_REFUSED');
- assert.equal((await f.client.run(input('admin_update',{allow_squash_merge:true},'ad'))).errorCode,'INSTALLATION_PERMISSION_MISSING');
+ assert.equal((await f.client.run(input('admin_update',{allow_squash_merge:true},'ad'))).errorCode,'OWNER_CONFIRMATION_REQUIRED');
+ const confirmed=fixture({account:'ad',permissions:AD_BROAD,authorize:async()=>true});
+ assert.equal((await confirmed.client.run(input('admin_update',{allow_squash_merge:true},'ad'))).errorCode,'INSTALLATION_PERMISSION_MISSING');
  assert.equal((await f.client.run(input('ruleset_update',RULESET,'ad'))).errorCode,'OWNER_CONFIRMATION_REQUIRED');
  assert.ok(!OPERATION_NAMES.some(o=>/force|delete_branch|merge$/.test(o)),'no force-push, branch deletion or direct merge operation exists');
 });
@@ -582,4 +584,19 @@ test('default branch: create_branch, update_file, edit_file and commit_files to 
   assert.equal(executionTokens(f.calls).length,0,operation);assert.equal(businessCalls(f.calls).length,0,operation);
   assert.equal(f.calls.some(c=>c.method&&c.method!=='GET'&&!c.path.endsWith('/access_tokens')),false,operation);
  }
+});
+// ADR 0003 section 4 (Deja 2026-11-16): admin_update needs a host confirmation each time, for every
+// account, checked before the private key is read.
+test('admin_update without a host confirmation is refused before the key, for every account',async()=>{
+ for(const account of ['qq','deja','bb']){
+  const f=fixture({account,permissions:{...expected,administration:'write'}});
+  const r=await f.client.run(input('admin_update',{allow_squash_merge:true},account));
+  assert.equal(r.errorCode,'OWNER_CONFIRMATION_REQUIRED',account);assert.equal(r.execution,'not_executed');
+  assert.equal(f.credentialsCalls(),0,account);assert.equal(f.calls.length,0,account);
+ }
+ const ok=fixture({account:'deja',permissions:{...expected,administration:'write'},authorize:async()=>true});
+ const r=await ok.client.run(input('admin_update',{allow_squash_merge:true},'deja'));
+ assert.equal(r.ok,true,JSON.stringify(r));
+ assert.deepEqual(executionTokens(ok.calls).map(t=>t.permissions),[{metadata:'read',administration:'write'}]);
+ assert.equal(ok.calls.filter(c=>c.method==='PATCH').length,1);
 });
