@@ -115,7 +115,7 @@ function createSettings({store,loader,verifyKey}){
    const hash=sha256(canonical({account:args.account,fingerprint,summary,replace:args.replace===true}));
    if((args.phase??'store')==='inspect')return {ok:true,account:args.account,summary,hash};
    if(args.hash!==hash)fail('PROPOSAL_CHANGED');
-   const imported=await store.importKeyText({account:args.account,pem_text:pem,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:{appSlug:r.app_slug}});
+   const imported=await store.importKeyText({account:args.account,pem_text:pem,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:r.warnings?.length?{}:{appSlug:r.app_slug}});
    await audit({event:'import_key',account:args.account,fingerprint:imported.fingerprint,summary});
    return {ok:true,account:args.account,fingerprint:imported.fingerprint,app_slug:r.app_slug,installation_id:r.installation_id,installationRepositorySelection:r.installationRepositorySelection,installationPermissions:r.installationPermissions,repositories:r.installationRepositories.repositories,summary};
   }finally{if(host?.secrets)host.secrets.app_private_key='';}
