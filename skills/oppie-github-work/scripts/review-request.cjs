@@ -354,7 +354,7 @@ var require_scope_config = __commonJS({
         const seenApps = /* @__PURE__ */ new Set(), seenInstalls = /* @__PURE__ */ new Set();
         for (const [name, a] of Object.entries(raw.newAccounts)) {
           if (!ACCOUNT_NAME.test(name) || BUILTIN_ACCOUNTS.includes(name)) invalid("newAccounts name " + name);
-          if (!plain(a) || Object.keys(a).some((k) => !["appId", "installationId", "appName", "appSlug", "role", "operations", "allowBroaderInstallation"].includes(k))) invalid("newAccounts " + name);
+          if (!plain(a) || Object.keys(a).some((k) => !["appId", "installationId", "appName", "appSlug", "role", "operations"].includes(k))) invalid("newAccounts " + name);
           id(a.appId, "appId");
           id(a.installationId, "installationId");
           if (BUILTIN_APP_IDS.includes(a.appId) || BUILTIN_INSTALLATION_IDS.includes(a.installationId)) invalid("newAccounts " + name + " reuses a compiled App or installation");
@@ -368,11 +368,10 @@ var require_scope_config = __commonJS({
           }
           const role = a.role === void 0 ? "review" : a.role;
           if (!ROLES.includes(role)) invalid("role");
-          if (a.allowBroaderInstallation !== void 0 && typeof a.allowBroaderInstallation !== "boolean") invalid("allowBroaderInstallation");
           if (seenApps.has(a.appId) || seenInstalls.has(a.installationId)) invalid("newAccounts duplicate id");
           seenApps.add(a.appId);
           seenInstalls.add(a.installationId);
-          newAccounts[name] = Object.freeze({ appId: a.appId, installationId: a.installationId, appName: a.appName, appSlug, role, ...operations ? { operations } : {}, ...a.allowBroaderInstallation === true ? { allowBroaderInstallation: true } : {} });
+          newAccounts[name] = Object.freeze({ appId: a.appId, installationId: a.installationId, appName: a.appName, appSlug, role, ...operations ? { operations } : {} });
         }
       }
       const known = [...BUILTIN_ACCOUNTS, ...Object.keys(newAccounts)];
@@ -522,7 +521,7 @@ var require_core = __commonJS({
       const slug = a.appSlug || a.appName.toLowerCase();
       const mayWrite = a.role === "write" || Object.values(config.repositoryRoles).some((t) => t[name] === "write");
       const contentsWrite = mayWrite && (!a.operations || a.operations.some((o) => CONTENT_WRITE_OPERATIONS.includes(o)));
-      return Object.freeze({ account: name, app_id: a.appId, installation_id: a.installationId, app_name: a.appName, app_slug: slug, app_slug_status: "expected_not_live", allowed_slugs: Object.freeze([.../* @__PURE__ */ new Set([slug, "oppie-agent-" + name])]), admin: false, configured: true, role: a.role, operations: a.operations || null, contents_write: contentsWrite, allow_broader_installation: a.allowBroaderInstallation === true });
+      return Object.freeze({ account: name, app_id: a.appId, installation_id: a.installationId, app_name: a.appName, app_slug: slug, app_slug_status: "expected_not_live", allowed_slugs: Object.freeze([.../* @__PURE__ */ new Set([slug, "oppie-agent-" + name])]), admin: false, configured: true, role: a.role, operations: a.operations || null, contents_write: contentsWrite });
     }
     function allowedAppSlug(account, slug) {
       return typeof slug === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.includes(slug);
@@ -585,15 +584,35 @@ var require_core = __commonJS({
       if (!Object.hasOwn(allowed, n)) bad("REPOSITORY_NOT_ALLOWED");
       return n;
     }
-    function permissions(a, operation) {
-      return { contents: a.configured ? a.contents_write ? "write" : "read" : a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+    function contentsNeed(a, operation) {
+      if (operation === void 0) return a.account === "qq" ? "read" : a.configured ? a.contents_write ? "write" : "read" : "write";
+      return CONTENT_WRITE_OPERATIONS.includes(operation) || a.account === "qq" && operation === "enqueue_pull" ? "write" : "read";
     }
-    function checkPermissions(actual, a, phase = "execution", operation) {
-      const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
-      const pgInstallation = phase === "installation" && (a.account === "pg" || a.configured === true && a.allow_broader_installation === true);
-      const allowSuperset = a.account === "qq" || pgInstallation;
-      if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
-      if (!obj(actual) || Object.entries(expected).some(([k, v]) => allowSuperset ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || !allowSuperset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
+    function permissions(a, operation) {
+      return { contents: contentsNeed(a, operation), issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+    }
+    var PERMISSION_RANK = Object.freeze({ none: 0, read: 1, write: 2 });
+    function missingPermissions(actual, needed) {
+      const level = (k) => obj(actual) && typeof actual[k] === "string" && Object.hasOwn(PERMISSION_RANK, actual[k]) ? actual[k] : "none";
+      return Object.entries(needed).filter(([k, v]) => PERMISSION_RANK[level(k)] < PERMISSION_RANK[v]).map(([permission, required]) => ({ permission, required, installed: level(permission) }));
+    }
+    function checkInstallation(actual, a, operation) {
+      const missing = missingPermissions(actual, permissions(a, operation));
+      if (!missing.length) return;
+      const appPermissionsUrl = "https://github.com/organizations/" + OWNER + "/settings/apps/" + a.app_slug + "/permissions", installationUrl = "https://github.com/organizations/" + OWNER + "/settings/installations/" + a.installation_id;
+      throw new CoreError("INSTALLATION_PERMISSION_MISSING", "not_executed", void 0, {
+        account: a.account,
+        app: a.app_name,
+        operation,
+        missing,
+        appPermissionsUrl,
+        installationUrl,
+        fix: "Add " + missing.map((m) => m.permission + ":" + m.required + " (installed: " + m.installed + ")").join(", ") + " in the App permissions (" + appPermissionsUrl + ") and accept the update on the installation page (" + installationUrl + ")."
+      });
+    }
+    function checkTokenPermissions(actual, a, operation) {
+      const expected = permissions(a, operation), superset = a.account === "qq";
+      if (!obj(actual) || Object.entries(expected).some(([k, v]) => superset ? (PERMISSION_RANK[actual[k]] ?? -1) < PERMISSION_RANK[v] : actual[k] !== v) || !superset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
     }
     function makeJwt(account, pem, now = Date.now()) {
       const h = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -931,7 +950,7 @@ var require_core = __commonJS({
           if (Number(app?.id) !== account.app_id || typeof app?.slug !== "string" || !account.allowed_slugs.includes(app.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
           const installation = await api("/app/installations/" + account.installation_id, jwt);
           if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
-          checkPermissions(installation.permissions, account, "installation");
+          checkInstallation(installation.permissions, account, operation);
           const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
@@ -956,7 +975,7 @@ var require_core = __commonJS({
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
-          checkPermissions(tokenResponse.permissions, account, "execution", operation);
+          checkTokenPermissions(tokenResponse.permissions, account, operation);
           const repos = await api("/installation/repositories?per_page=100", token);
           if (!exactRepos(repos, effectiveRepos)) scopeMismatch("EXECUTION_REPOSITORY_SCOPE_MISMATCH", repos, effectiveRepos);
           if (preflight?.kind === "owner_reference") {
@@ -1030,7 +1049,7 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.filter((r) => Object.hasOwn(scope.installation, r.name)).map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositorySelection: installation.repository_selection, installationRepositoryCount: probe.repositories.length, scopeRevision: policy.revision, scopeConfigSource: config === DEFAULT_CONFIG ? "default" : "file", scopeConfigDigest: configDigest(config), expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), installationPermissions: Object.fromEntries(Object.entries(obj(installation.permissions) ? installation.permissions : {}).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && Object.hasOwn(PERMISSION_RANK, v)).slice(0, 40)), missingInstallationPermissions: missingPermissions(installation.permissions, permissions(account)), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.filter((r) => Object.hasOwn(scope.installation, r.name)).map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositorySelection: installation.repository_selection, installationRepositoryCount: probe.repositories.length, scopeRevision: policy.revision, scopeConfigSource: config === DEFAULT_CONFIG ? "default" : "file", scopeConfigDigest: configDigest(config), expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
