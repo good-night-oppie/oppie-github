@@ -15,10 +15,11 @@ Since 1.5.0-preview.10-settings.7. Owner decision 2026-11-16 (oppie-github#8): ã
 - Workflow files: a write that touches `.github/workflows/` (update_file, edit_file, or a commit_files change, delete or rename) adds `workflows:write` to that call's token request, because GitHub refuses workflow changes without it. Without it on the installation the call fails with `INSTALLATION_PERMISSION_MISSING` and `details.workflowFiles`. No other call asks for `workflows`, and an installation that holds it still passes `identity`.
 - Repository ID first (ADR 0003 section 2 step 6): the name, which must belong to good-night-oppie, is resolved to its numeric ID with a `metadata:read` token limited to that name (`GET /repos/good-night-oppie/<name>`; owner and full name must match, otherwise `REPOSITORY_RESOLUTION_FAILED`). The execution token is then requested with `repository_ids` only, so it is bound to that repository even if a name changes in between.
 - Default branch: a write to the default branch (create_branch, update_file, edit_file, commit_files) is refused from the resolved repository's `default_branch`, before the execution token and before any request that could write (`DEFAULT_BRANCH_WRITE_REFUSED`).
+- Comments on pull requests (ADR 0003 Amendment 1): GitHub refuses a comment on a pull request from a token holding only `issues:write`. Before `comment_issue`, a `metadata:read` + `pull_requests:read` token for the resolved repository checks whether the number is a pull request (404 means an issue); if it is, the execution token asks for `issues:write` and `pull_requests:write`, and an installation without `pull_requests:write` fails with `INSTALLATION_PERMISSION_MISSING` before the execution token. Installations that cannot read pull requests skip the check.
 - Confirmation cards (ADR 0003 section 4): `ruleset_update` (with the owner's written authorization and a one-use nonce) and `admin_update` (repository merge settings) need a host confirmation every time, whichever account runs them; without it the call fails with `OWNER_CONFIRMATION_REQUIRED` before the private key is read.
 - GitHub refuses a token for a repository outside the installation; the plugin reports `REPOSITORY_NOT_INSTALLED` with the repository name.
 - After the token: the granted permissions must equal the request (`TOKEN_PERMISSION_MISMATCH`) and the token's repository listing must be exactly the resolved repository IDs with the same full names (`EXECUTION_REPOSITORY_SCOPE_MISMATCH`).
-- Identity stays pinned: App ID, slug and owner organisation must match (`APP_IDENTITY_MISMATCH`); the installation must be the App's, in good-night-oppie, an organisation and not suspended (`INSTALLATION_MISMATCH`).
+- Identity stays pinned: App ID and owner organisation must match (`APP_IDENTITY_MISMATCH`). The App ID is the identity anchor (ADR 0003 Amendment 1): a slug that differs from the configured one only adds `receipt.warnings` (`{check:'app_slug',expected,actual}`) and the call goes on; the key store keeps the configured slug, and bot comments are still recognised by the configured slugs only (`knownBotLogin`). the installation must be the App's, in good-night-oppie, an organisation and not suspended (`INSTALLATION_MISMATCH`).
 - Private keys only through the settings-page key field into the DPAPI store, never in logs, results or audit lines. No writes to a repository's default branch (`DEFAULT_BRANCH_WRITE_REFUSED`); `commit_files` is fast-forward only, force is never allowed. `ruleset_update` still needs the owner's written authorization comment, a one-use nonce and a host confirmation each time, whichever account runs it. `automaticReviews` is read only when the worker starts. The configuration file is signed (see Integrity); forged or replayed files fail closed.
 
 ## Settings page
@@ -81,7 +82,7 @@ The settings page edits the configuration below (the `config` text inside the si
 | Key | Rules |
 | --- | --- |
 | `accounts` | accounts usable on this machine; each must be built-in or defined in `newAccounts`. Default: built-ins plus every `newAccounts` entry. |
-| `newAccounts` | additional teammate Apps: `appId` (pinned), `appName`, optional `appSlug`. The live App must have that ID, a slug of `appSlug` (or lower-case `appName`) or `oppie-agent-<name>`, and be owned by good-night-oppie. A built-in account name or a built-in App ID cannot be reused; two accounts cannot share an App ID. |
+| `newAccounts` | additional teammate Apps: `appId` (pinned), `appName`, optional `appSlug`. The live App must have that ID and be owned by good-night-oppie; its slug is expected to be `appSlug` (or lower-case `appName`) or `oppie-agent-<name>`, and a different live slug only adds a warning. A built-in account name or a built-in App ID cannot be reused; two accounts cannot share an App ID. |
 
 ## Not configurable
 
@@ -109,7 +110,7 @@ None in this version. Every call reads `/app` and the installation again and req
 ## `identity` output
 
 The `identity` token asks for `metadata:read` only. Fields:
-- kept: `app_id`, `app_slug`, `owner`, `installationRepositorySelection`, `scopeRevision`, `scopeConfigSource`, `scopeConfigDigest`, and `expires_at` (with `repo`);
+- kept: `app_id`, `app_slug` (the live slug), `owner`, `warnings` (only when the live slug differs from the configured one), `installationRepositorySelection`, `scopeRevision`, `scopeConfigSource`, `scopeConfigDigest`, and `expires_at` (with `repo`);
 - added: `installation_id`, `installationPermissions` (what the installation actually holds), `availableOperations` (operations the installation allows), `repository` (`{id, full_name}`, with `repo`), and `installationRepositories` as `{complete, repositories}`;
 - removed: `permissions` (role permissions), `repositories` (the old repository list) and `installationRepositoryCount`.
 Without `repo` no single-repository token is requested; one `metadata:read` token lists the installation's repositories.

@@ -45,6 +45,12 @@ const OPERATION_NEEDS=Object.freeze({
 const OPERATION_NAMES = Object.freeze(Object.keys(OPERATION_NEEDS));
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
+// Plain-language error step (PG design review #8 step 1): failures carry which check failed; the
+// worker turns them into Chinese text (node/messages.cjs). Decisions are unchanged. Details hold only
+// public identifiers (App/installation IDs, slugs, logins), never keys, key paths or tokens.
+const printable=s=>[...s].map(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127?' ':c).join('');
+function configFailure(e){const reason=typeof e?.reason==='string'?printable(e.reason).slice(0,200):undefined;throw new CoreError('INVALID_SCOPE_CONFIGURATION','not_executed',undefined,reason?{reason}:undefined);}
+function checksFailed(code,checks){const failed=checks.filter(c=>!c.ok).map(({ok,...c})=>c);if(failed.length)throw new CoreError(code,'not_executed',undefined,{failed});}
 function configDigest(c){return crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0,16);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
@@ -112,7 +118,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
   try{
    if(Buffer.byteLength(JSON.stringify(input??null),'utf8')>MAX_OPERATION_BYTES)bad('REQUEST_TOO_LARGE');
    exact(input,['account','repo','operation','args']);
-   let config;try{config=await scopeConfig();}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   let config;try{config=await scopeConfig();}catch(e){configFailure(e);}
    const account=configuredAccount(input.account,config);if(!account)bad('ACCOUNT_REQUIRED');const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    // Owner 2026-11-16: no role, operation or repository list in the plugin. Any repository of the
@@ -132,7 +138,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     case 'get_issue':exact(args,['number']);route=root+'/issues/'+number();break;
     case 'create_issue':body=issuePayload(true);method='POST';route=root+'/issues';break;
     case 'update_issue':body=issuePayload(false);method='PATCH';route=root+'/issues/'+number();break;
-    case 'comment_issue':exact(args,['number','body']);body={body:nonempty(args.body,65000)};method='POST';route=root+'/issues/'+number()+'/comments';break;
+    case 'comment_issue':exact(args,['number','body']);body={body:nonempty(args.body,65000)};method='POST';preflight={kind:'comment',number:number()};route=root+'/issues/'+preflight.number+'/comments';break;
     case 'get_pull':exact(args,['number']);route=root+'/pulls/'+number();break;
     case 'pull_files':case 'list_reviews':{const q=listQuery(args,['number']);route=root+'/pulls/'+number()+(operation==='pull_files'?'/files?':'/reviews?')+q;break;}
     case 'create_pull':exact(args,['title','body','head','base','draft']);body={title:nonempty(args.title,256),body:str(args.body??'',65000),head:ref(args.head),base:ref(args.base),draft:args.draft===undefined?true:args.draft};if(typeof body.draft!=='boolean'||body.head===body.base)bad();method='POST';route=root+'/pulls';break;
@@ -188,8 +194,15 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    let pem;try{pem=await credentials(account.account);}catch(_){bad('CREDENTIAL_UNAVAILABLE');}if(typeof pem!=='string')bad('CREDENTIAL_UNAVAILABLE');
    secrets.push(pem);const jwt=makeJwt(account,pem,now());secrets.push(jwt);pem=null;
    const app=await api('/app',jwt);
-   // Identity never follows a matching name alone: App ID and owner stay pinned.
-   if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
+   // Identity never follows a name: App ID and owner stay pinned. The slug is a name the owner can
+   // change on GitHub, so a different slug only adds a warning (ADR 0003 Amendment 1, PG; Deja agreed).
+   // Recognising a teammate's bot comments (knownBotLogin) still uses the configured slugs only.
+   const shown=v=>typeof v==='string'||Number.isSafeInteger(v)?String(v).slice(0,100):v===undefined||v===null?'missing':'invalid';
+   checksFailed('APP_IDENTITY_MISMATCH',[
+    {check:'app_id',expected:String(account.app_id),actual:shown(app?.id),ok:Number(app?.id)===account.app_id},
+    {check:'app_owner',expected:OWNER,actual:shown(app?.owner?.login),ok:app?.owner?.login===OWNER}]);
+   const warnings=typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)?[]:[{check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug)}];
+   const warned=warnings.length?{warnings}:{};
    // Compiled accounts keep their pinned installation; accounts added in the settings page use the
    // App's single installation in good-night-oppie, looked up now (follows GitHub on every call).
    let installation;
@@ -201,9 +214,15 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     installation=mine[0];
    }
    const installationId=account.installation_id||Number(installation?.id);
-   if(!Number.isSafeInteger(installationId)||Number(installation?.id)!==installationId||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
+   checksFailed('INSTALLATION_MISMATCH',[
+    {check:'installation_id',expected:account.installation_id?String(account.installation_id):'the App installation in '+OWNER,actual:shown(installation?.id),ok:Number.isSafeInteger(installationId)&&Number(installation?.id)===installationId},
+    {check:'installation_app_id',expected:String(account.app_id),actual:shown(installation?.app_id),ok:Number(installation?.app_id)===account.app_id},
+    {check:'installation_owner',expected:OWNER,actual:shown(installation?.account?.login),ok:installation?.account?.login===OWNER},
+    {check:'installation_owner_type',expected:'Organization',actual:shown(installation?.account?.type),ok:installation?.account?.type==='Organization'},
+    {check:'repository_selection',expected:'selected or all',actual:shown(installation?.repository_selection),ok:['selected','all'].includes(installation?.repository_selection)},
+    {check:'suspended',expected:'not suspended',actual:installation?.suspended_at?'suspended':'not suspended',ok:!installation?.suspended_at}]);
    // The installation may hold more than this operation needs (and usually does); only a lack fails.
-   const workflowFiles=workflowPaths(preflight),needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
+   const workflowFiles=workflowPaths(preflight);let needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
    checkInstallation(installation.permissions,account,operation,installationId,needed,workflowFiles);
    // identity also reports the whole installation (an unscoped metadata-only token, bounded listing).
    async function listInstallation(){
@@ -220,8 +239,8 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    }
    const installationPermissions=Object.fromEntries(Object.entries(obj(installation.permissions)?installation.permissions:{}).filter(([k,v])=>/^[a-z_]{1,40}$/.test(k)&&Object.hasOwn(PERMISSION_RANK,v)).slice(0,60));
    const installationSummary=()=>({app_id:account.app_id,app_slug:app.slug,owner:OWNER,installation_id:installationId,installationRepositorySelection:installation.repository_selection,installationPermissions,
-    availableOperations:OPERATION_NAMES.filter(o=>!missingPermissions(installation.permissions,permissions(o)).length),scopeRevision:config.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config)});
-   if(repo===null)return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:null,operation,execution:'completed',url:app.html_url},result:clean({...installationSummary(),installationRepositories:await listInstallation()},secrets)};
+    availableOperations:OPERATION_NAMES.filter(o=>!missingPermissions(installation.permissions,permissions(o)).length),scopeRevision:config.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config),...warned});
+   if(repo===null)return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:null,operation,execution:'completed',url:app.html_url,...warned},result:clean({...installationSummary(),installationRepositories:await listInstallation()},secrets)};
    // The execution token covers only the target repository (plus the owner's authorization comment
    // repository for ruleset_update) and only this operation's permissions.
    const proofRepo=preflight?.kind==='owner_reference'?preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1]:null;
@@ -244,6 +263,17 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const tokenIds=[...new Set([...resolved.values()].map(r=>r.id))];
    // Default branch (QQ 5914736615 point 3): refused here, before the execution token and any write.
    if(['branch','file','edit','commit'].includes(preflight?.kind)&&(typeof resolved.get(repo).default_branch!=='string'||resolved.get(repo).default_branch===preflight.branch))bad('DEFAULT_BRANCH_WRITE_REFUSED');
+   // A comment on a pull request (ADR 0003 Amendment 1, PG): GitHub refuses it from a token holding
+   // issues:write only, so when the number is a pull request the token also asks for pull_requests:write.
+   // Checked with a separate metadata + pull_requests:read token for this repository; 404 means an issue.
+   if(preflight?.kind==='comment'&&!missingPermissions(installation.permissions,{pull_requests:'read'}).length){
+    const probePermissions={metadata:'read',pull_requests:'read'};let probeResponse;
+    try{probeResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repository_ids:tokenIds,permissions:probePermissions});}catch(e){notInstalled(e);}
+    const probeToken=validToken(probeResponse);checkTokenPermissions(probeResponse.permissions,probePermissions);
+    let pull=null;try{pull=await api(root+'/pulls/'+preflight.number,probeToken);}catch(e){if(!(e instanceof CoreError&&e.status===404))throw e;}
+    if(pull!==null&&(!obj(pull)||pull.number!==preflight.number))bad('INVALID_API_RESPONSE');
+    if(pull!==null){needed={...needed,pull_requests:'write'};checkInstallation(installation.permissions,account,operation,installationId,needed);}
+   }
    let tokenResponse;
    try{tokenResponse=await api('/app/installations/'+installationId+'/access_tokens',jwt,'POST',{repository_ids:tokenIds,permissions:needed});}catch(e){notInstalled(e);}
    const token=validToken(tokenResponse);checkTokenPermissions(tokenResponse.permissions,needed);
@@ -299,7 +329,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
    const result=operation==='identity'?{...installationSummary(),repository:{id:target.id,full_name:target.full_name},installationRepositories:await listInstallation(),expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
-   return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
+   return {ok:true,receipt:{scopeRevision:config.revision,account:account.account,app_slug:app.slug,installation_id:installationId,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url,...warned},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
  }
