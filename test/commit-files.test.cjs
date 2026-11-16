@@ -57,7 +57,7 @@ function fixture(options={}){
   const u=new URL(url),p=decodeURIComponent(u.pathname),body=init.body?JSON.parse(init.body):undefined;
   calls.push({path:p,method:init.method,body,signal:init.signal});
   if(options.override){const out=await options.override(p,init,body,git);if(out){if(out.throw)throw Error('network');return reply(out.data,out.status);}}
-  if(p==='/app')return reply({id:account.app_id,slug:'oppie-agent-'+account.account,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/x'});
+  if(p==='/app')return reply({id:account.app_id,slug:account.app_slug,owner:{login:'good-night-oppie'},html_url:'https://github.com/apps/x'});
   if(p==='/app/installations/'+account.installation_id)return reply({id:account.installation_id,app_id:account.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',suspended_at:null,permissions:{...perms,...(account.admin?{administration:'write'}:{})}});
   if(p.endsWith('/access_tokens')){const t={token:'secret-token-'+(++counter),expires_at:new Date(NOW+3600000).toISOString(),permissions:{...perms,...(account.admin?{administration:'write'}:{})}};const ids=body.repository_ids;tokenRepositories.set('Bearer '+t.token,ids?{total_count:ids.length,repositories:repos.repositories.filter(r=>ids.includes(r.id))}:repos);return reply(t);}
   if(p==='/installation/repositories')return reply(tokenRepositories.get(init.headers.Authorization));
@@ -273,11 +273,11 @@ test('an uncertain ref update is read back once and never retried',async()=>{
  assert.equal(c.ok,false);assert.equal(c.execution,'unknown');assert.equal(dark.calls.filter(x=>x.method==='PATCH').length,1);
 });
 
-test('QQ and ReviewInbox cannot author commits; other teammates can',async()=>{
+test('QQ cannot author commits; all other teammates including ReviewInbox can',async()=>{
  for(const account of Object.keys(ACCOUNTS)){
   const f=fixture({account});
   const r=await run(f,base(f,{changes:[{path:'a',content_base64:b64('a')}]}),account);
-  if(['qq','reviewinbox'].includes(account)){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
+  if(account==='qq'){assert.equal(r.ok,false,account);assert.equal(f.credentialsCalls(),0);}
   else assert.equal(r.ok,true,account+JSON.stringify(r));
  }
 });

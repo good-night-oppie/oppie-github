@@ -14,7 +14,7 @@ const SHA='a'.repeat(40);
 function fixture(options={}){
  const calls=[];const tokenRepositories=new Map();let credentialsCalls=0;let counter=0;
  const account=ACCOUNTS[options.account||'bb']||(options.account==='reviewinbox'?{account:'reviewinbox',app_id:5687106,installation_id:180305629,admin:false}:undefined);
- const perms={...expected,...(account.account==='reviewinbox'?{contents:'read'}:{}),...(account.admin?{administration:'write'}:{})};
+ const perms={...expected,...(account.admin?{administration:'write'}:{})};
  const fetch=async(url,init)=>{
   const path=new URL(url).pathname;calls.push({url,path,...init,parsed:init.body?JSON.parse(init.body):undefined});
   assert.equal(new URL(url).origin,'https://api.github.com');assert.equal(init.redirect,'error');
@@ -54,6 +54,13 @@ for(const stage of ['installation','execution']){
     if(path==='/installation/repositories'&&++reads===(stage==='installation'?1:2))return {status:200,data:actual};
    }});
    const r=await f.client.run(input('get_issue',{number:3}));
+   // 2026-11-15: an extra installed repository is ignored (owner granted all repositories);
+   // the execution token is still narrowed and checked exactly.
+   if(stage==='installation'&&variant==='extra'){
+    assert.equal(r.ok,true,r.errorCode);
+    const exec=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;
+    assert.ok(!exec.repository_ids.includes(99));return;
+   }
    assert.equal(r.errorCode,stage==='installation'?'INSTALLATION_REPOSITORY_SCOPE_MISMATCH':'EXECUTION_REPOSITORY_SCOPE_MISMATCH');
    assert.equal(r.execution,'not_executed');
    assert.deepEqual(r.diagnostics.expectedRepositories,repos.repositories.map(x=>x.full_name));
@@ -131,30 +138,20 @@ test('normal operation receipt also names the live renamed App',async()=>{
  assert.equal(r.ok,true);assert.equal(r.receipt.app_slug,'bboppiexyz');
 });
 
-test('ReviewInbox actual App identity uses read-only code and comment-capable review permissions',async()=>{
+test('ReviewInbox actual App identity uses ordinary write permissions',async()=>{
  const f=fixture({account:'reviewinbox'}),r=await f.client.run(input('identity',{},'reviewinbox'));
  assert.equal(r.ok,true);assert.equal(r.result.app_id,5687106);assert.equal(r.receipt.installation_id,180305629);
  assert.equal(r.result.app_slug,'reviewinboxoppiexyz');
- assert.deepEqual(r.result.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
+ assert.deepEqual(r.result.permissions,{contents:'write',issues:'write',pull_requests:'write',metadata:'read'});
  assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens'))[1].parsed.permissions,r.result.permissions);
  const posted=await f.client.run(input('submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'Finding'},'reviewinbox'));
  assert.equal(posted.ok,true);assert.equal(posted.receipt.app_slug,'reviewinboxoppiexyz');
 });
 
-test('ReviewInbox code/admin writes and formal review decisions fail before key access',async()=>{
- const f=fixture({account:'reviewinbox'});
- for(const [operation,args] of [
-  ['create_branch',{branch:'agent/test',sha:SHA}],
-  ['update_file',{path:'a.txt',branch:'agent/test',expected_sha:null,message:'test',content_base64:'dGVzdA=='}],
-  ['admin_get',{}],['admin_update',{allow_squash_merge:true}],
-  ['submit_review',{number:7,commit_id:SHA,event:'APPROVE',body:'ok'}],
-  ['submit_review',{number:7,commit_id:SHA,event:'REQUEST_CHANGES',body:'fix'}],
- ]) assert.equal((await f.client.run(input(operation,args,'reviewinbox'))).ok,false,operation);
- assert.equal(f.credentialsCalls(),0);assert.equal(f.calls.length,0);
-});
+test('ReviewInbox administration stays refused before key access',async()=>{const f=fixture({account:'reviewinbox'});for(const operation of ['admin_get','admin_update'])assert.equal((await f.client.run(input(operation,operation==='admin_update'?{allow_squash_merge:true}:{},'reviewinbox'))).errorCode,'ADMIN_ACCOUNT_REQUIRED');assert.equal(f.credentialsCalls(),0);});
 
 test('ReviewInbox does not accept invented legacy slug or elevated installation permissions',async()=>{
- for(const options of [{slug:'oppie-agent-reviewinbox'},{permissions:{...expected}},{permissions:{...expected,contents:'read',administration:'write'}}]){
+ for(const options of [{slug:'oppie-agent-reviewinbox'},{permissions:{...expected,contents:'read'}},{permissions:{...expected,administration:'write'}}]){
   const f=fixture({account:'reviewinbox',...options});const r=await f.client.run(input('identity',{},'reviewinbox'));
   assert.equal(r.ok,false);assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
  }
@@ -223,15 +220,15 @@ test('ruleset update rejects an expired owner comment before PUT',async()=>{cons
 test('consumed owner nonce cannot produce a second ruleset write',async()=>{const args={ruleset_id:8,ruleset:{enforcement:'active'},nonce:'a'.repeat(32),owner_authorization:'https://github.com/good-night-oppie/MontClip/issues/1#issuecomment-2'};const f=fixture({account:'qq',authorize:async()=>true,claimAuthorization:async()=>false,override(path){if(path.endsWith('/issues/comments/2'))return {status:200,data:{html_url:args.owner_authorization,user:{login:'EdwardTang',id:3278807,type:'User'},created_at:new Date(NOW-1000).toISOString(),body:require('../node/owner-authorization.cjs').requiredLine('MontClip',args)}};}});const r=await f.client.run(input('ruleset_update',args,'qq'));assert.equal(r.errorCode,'OWNER_AUTHORIZATION_REPLAYED');assert.equal(f.calls.some(c=>c.method==='PUT'),false);});
 const riInstall=CATALOG;
 const riSet=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
-function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||twoRepos)};}});}
-test('ReviewInbox validates six installation repos while minting original two-repo execution token',async()=>{
- const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,7);assert.equal(r.result.repositories.length,2);
- const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(REPOSITORIES).sort());assert.deepEqual(request.permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
+function riFixture(extra={}){let reads=0;return fixture({account:'reviewinbox',override(path){if(path==='/installation/repositories')return {status:200,data:++reads===1?(extra.install||riSet(riInstall)):(extra.execution||riSet(riInstall))};}});}
+test('ReviewInbox validates seven installation and execution repositories',async()=>{
+ const f=riFixture(),r=await f.client.run(input('identity',{},'reviewinbox'));assert.equal(r.ok,true);assert.equal(r.result.installationRepositories.length,7);assert.equal(r.result.repositories.length,7);
+ const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).parsed;assert.deepEqual(request.repository_ids.sort(),Object.values(CATALOG).sort());assert.deepEqual(request.permissions,{contents:'write',issues:'write',pull_requests:'write',metadata:'read'});
 });
 test('ReviewInbox wrong/missing/duplicate installation and wider token sets fail closed',async()=>{
  const full=riSet(riInstall);
- for(const extra of [{install:twoRepos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:full}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
- for(const repo of ['montclip-rsi','rsi-playbooks','oppie-github','sglang-review-inbox']){const f=riFixture();assert.equal((await f.client.run({account:'reviewinbox',repo,operation:'identity',args:{}})).ok,false);assert.equal(f.credentialsCalls(),0);}
+ for(const extra of [{install:twoRepos},{install:{...full,repositories:[...full.repositories.slice(1),full.repositories[1]]}},{install:riSet({...riInstall,'oppie-github':1})},{execution:twoRepos}])assert.equal((await riFixture(extra).client.run(input('identity',{},'reviewinbox'))).ok,false);
+ for(const repo of ['outside','makecindy/cindy']){const f=riFixture();assert.equal((await f.client.run({account:'reviewinbox',repo,operation:'identity',args:{}})).ok,false);assert.equal(f.credentialsCalls(),0);}
 });
 
 
@@ -254,7 +251,7 @@ test('untrusted baseline type, size, encoding, bytes or Git blob hash are reject
 test('invalid UTF-8 baseline is not silently repaired',async()=>{const b=Buffer.from([255,79,76,68]),f=editFixture(b),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(out.errorCode,'INVALID_FILE_ENCODING');assert.equal(f.calls.some(x=>x.method==='PUT'),false);});
 test('edit_file accepts base64 contents just above the former decoded ceiling',async()=>{for(const [size,newText,ok] of [[525000,'NEW',true],[525000,'LONG',true],[525001,'NEW',true]]){const b=Buffer.from('OLD'+'x'.repeat(size-3)),next=Buffer.from(newText+'x'.repeat(size-3)),f=editFixture(b),out=await f.client.run(input('edit_file',editArgs(b,next,[{old_text:'OLD',new_text:newText}])));assert.equal(out.ok,ok,JSON.stringify(out));assert.equal(f.calls.filter(x=>x.method==='PUT').length,ok?1:0);}});
 test('edit_file requires both hashes and exact bounded edits before credentials',async()=>{const b=Buffer.from('OLD');for(const changed of [{expected_sha:null},{expected_result_sha256:null},{expected_result_sha256:'x'.repeat(64)},{edits:[]},{edits:[{old_text:'',new_text:'NEW'}]},{edits:[{old_text:'OLD',new_text:'NEW',regex:true}]},{local_path:'forbidden'},{edits:[{old_text:'OLD',new_text:String.fromCharCode(0xd800)}]}]){const f=editFixture(b),out=await f.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),...changed}));assert.equal(out.ok,false);assert.equal(f.credentialsCalls(),0);}});
-test('all twelve account roles still apply to edit_file',async()=>{const b=Buffer.from('OLD');for(const account of Object.keys(ACCOUNTS)){const f=editFixture(b,{account}),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW')),account));assert.equal(out.ok,!['qq','reviewinbox'].includes(account),account+JSON.stringify(out));if(['qq','reviewinbox'].includes(account))assert.equal(f.credentialsCalls(),0);}});
+test('all twelve account roles still apply to edit_file',async()=>{const b=Buffer.from('OLD');for(const account of Object.keys(ACCOUNTS)){const f=editFixture(b,{account}),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW')),account));assert.equal(out.ok,account!=='qq',account+JSON.stringify(out));if(account==='qq')assert.equal(f.credentialsCalls(),0);}});
 test('edit_file refuses default branch and never retries a failed or uncertain PUT',async()=>{const b=Buffer.from('OLD');const f=editFixture(b),denied=await f.client.run(input('edit_file',{...editArgs(b,Buffer.from('NEW')),branch:'main'}));assert.equal(denied.errorCode,'DEFAULT_BRANCH_WRITE_REFUSED');assert.equal(f.calls.some(x=>x.path.includes('/contents/')),false);for(const options of [{putStatus:409},{throwPut:true}]){const f=editFixture(b,options),out=await f.client.run(input('edit_file',editArgs(b,Buffer.from('NEW'))));assert.equal(out.ok,false);assert.equal(out.execution,options.throwPut?'unknown':'not_executed');assert.equal(f.calls.filter(x=>x.method==='PUT').length,1);}});
 test('oversized complete update_file params fail before credentials even when base64 length fits old cap',async()=>{const f=fixture(),out=await f.client.run(input('update_file',{path:'a.txt',branch:'docs/test',expected_sha:null,message:'中文🙂',content_base64:'a'.repeat(347836)}));assert.equal(out.errorCode,'REQUEST_TOO_LARGE');assert.equal(f.credentialsCalls(),0);});
 
@@ -370,7 +367,7 @@ test('#16 only QQ enqueue_pull requests a contents:write token; every other call
  assert.equal((await enq.client.run(input('enqueue_pull',{number:7,commit_id:SHA},'qq'))).ok,true);assert.deepEqual(tokenRequests(enq.calls),['write']);
  const qqOps=[['identity',{}],['get_pull',{number:7}],['list_rulesets',{}],['submit_review',{number:7,commit_id:SHA,event:'COMMENT',body:'ok'}],['dismiss_review',{number:7,review_id:4,message:'m'}]];
  for(const [operation,args] of qqOps){const f=fixture({account:'qq'});await f.client.run(input(operation,args,'qq'));assert.deepEqual(tokenRequests(f.calls),['read'],operation);}
- const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['read']);
+ const ri=fixture({account:'reviewinbox'});await ri.client.run(input('get_pull',{number:7},'reviewinbox'));assert.deepEqual(tokenRequests(ri.calls),['write']);
  const bb=fixture();await bb.client.run(input('get_pull',{number:7}));assert.deepEqual(tokenRequests(bb.calls),['write']);
 });
 test('#16 enqueue_pull refuses a token GitHub narrowed below contents:write before any GraphQL call',async()=>{

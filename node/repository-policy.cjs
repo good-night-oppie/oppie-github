@@ -9,10 +9,9 @@ const CATALOG=Object.freeze({...SIX,cindy:1457433299});
 const OPTIONAL_REPOSITORIES=Object.freeze(['cindy']);
 const ACCOUNT_NAMES=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
 const TWO=Object.freeze({MontClip:1441621868,'MontClip-Cindy':1446532339});
-// #22 (QQ review): roles on the cindy fork. bb/deja write (branches, files, PRs); dd reads and
-// posts COMMENT reviews only; qq uses review operations only (no admin, ruleset, dismissal or
-// merge queue). Every other account is left out of cindy execution until a separate small PR.
-const CINDY_ROLES=Object.freeze({bb:'write',deja:'write',dd:'comment_review',qq:'review'});
+// 2026-11-14: cindy inherits each account's original repository operation boundaries.
+// 'write' disables only the fork-specific restriction; global account controls still apply.
+const CINDY_ROLES=Object.freeze({bb:'write',deja:'write',dd:'write',qq:'write'});
 const CINDY_EXECUTION=Object.freeze(Object.keys(CINDY_ROLES));
 const REVIEW_OPERATIONS=Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','list_pulls','get_pull','pull_files','list_reviews','submit_review']);
 // Per-repository operation allowlist on top of the account's existing role; null means unchanged.
@@ -36,7 +35,7 @@ function repoMap(value){
  if(Object.keys(selected).length!==names.length)invalid();
  return Object.freeze(selected);
 }
-function baseline(account){return {installation:CATALOG,execution:account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX};}
+function baseline(account){return {installation:CATALOG,execution:CATALOG};}
 function sameMap(a,b){return Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>a[k]===b[k]);}
 function validatePolicy(value){
  record(value,['schemaVersion','revision','accounts']);

@@ -4,6 +4,7 @@ const {validateProof}=require('./owner-authorization.cjs');
 const {validateEdits,applyEdits,MAX_FILE_BYTES}=require('./file-edit.cjs');
 const commitFilesModule=require('./commit-files.cjs');
 const MAX_OPERATION_BYTES=261120; // Reserve 1 KiB below the host limit for the RPC envelope.
+const MAX_INSTALLATION_PAGES=10; // 1000 repositories; a larger listing fails closed as incomplete.
 const OWNER = 'good-night-oppie';
 const {initialPolicy,validatePolicy,repositoryRestriction,OPTIONAL_REPOSITORIES}=require('./repository-policy.cjs');
 const REPOSITORIES = Object.freeze({MontClip:1441621868, 'MontClip-Cindy':1446532339});
@@ -39,7 +40,7 @@ function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.sta
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
 // #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
 // write) requests contents:write, which the QQ installation already holds.
-function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':['reviewinbox','qq'].includes(a.account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+function permissions(a,operation){return {contents:a.account==='qq'&&operation==='enqueue_pull'?'write':a.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
 function checkPermissions(actual,a,phase='execution',operation){
  const expected=permissions(a,operation),rank={none:0,read:1,write:2};
  // PG may have additional owner-granted installation permissions. Never request
@@ -83,12 +84,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(operation==='request_reviewers'&&!REVIEWER_REQUEST_ACCOUNTS.includes(account.account))bad('REVIEWER_REQUEST_ACCOUNT_REFUSED');
    let policy;try{policy=validatePolicy(repositoryPolicy());}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
    const scope=policy.accounts[account.account];const expectedRepos=scope.execution;const repo=repoName(input.repo,expectedRepos);const args=input.args===undefined?{}:input.args;if(!obj(args))bad();
-   if(account.account==='reviewinbox'){
-    if(['create_branch','update_file','edit_file','commit_files'].includes(operation))bad('READ_ONLY_CONTENTS');
-    if(['admin_get','admin_update'].includes(operation))bad('ADMIN_ACCOUNT_REQUIRED');
-    if(operation==='submit_review'&&args.event!=='COMMENT')bad('COMMENT_ONLY_REVIEWER');
-   }
-   // #22: on the cindy fork DD and QQ may only read and review; DD reviews are COMMENT only.
+   // Repository restrictions supplement global account guards.
    const restriction=repositoryRestriction(account.account,repo);
    if(restriction){
     if(!restriction.operations.includes(operation))bad('REVIEW_ONLY_REPOSITORY');
@@ -171,7 +167,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    // matching name alone: App ID, owner and installation remain pinned below.
    if(Number(app?.id)!==account.app_id||!allowedAppSlug(account.account,app?.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
    const installation=await api('/app/installations/'+account.installation_id,jwt);
-   if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||installation?.repository_selection!=='selected'||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
+   if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
    // PG's installed App has administration permission; ordinary execution never requests it.
    checkPermissions(installation.permissions,account,'installation');
    // An unscoped metadata-only probe verifies the INSTALLATION's repository set.
@@ -179,7 +175,20 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const probeResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
    if(typeof probeResponse?.token!=='string'||!probeResponse.token)bad('INVALID_INSTALLATION_TOKEN');
    secrets.push(probeResponse.token);
-   const probe=await api('/installation/repositories?per_page=100',probeResponse.token);
+   // 2026-11-15: with "all repositories" the organisation listing can exceed one page; read it
+   // fully (bounded) so a partial listing is never mistaken for a missing repository.
+   async function listInstallation(token){
+    const repositories=[];let total=null;
+    for(let page=1;page<=MAX_INSTALLATION_PAGES;page++){
+     const r=await api('/installation/repositories?per_page=100'+(page>1?'&page='+page:''),token);
+     // A malformed page or a total that changes between pages makes the listing incomplete.
+     if(!obj(r)||!Number.isSafeInteger(r.total_count)||!Array.isArray(r.repositories)||(total!==null&&r.total_count!==total))return {total_count:-1,repositories};
+     total=r.total_count;repositories.push(...r.repositories);
+     if(repositories.length>=total||!r.repositories.length)break;
+    }
+    return {total_count:total,repositories};
+   }
+   const probe=await listInstallation(probeResponse.token);
    function exactRepos(r,expected=expectedRepos){const count=Object.keys(expected).length;return r?.total_count===count&&Array.isArray(r.repositories)&&r.repositories.length===count&&r.repositories.every(x=>obj(x)&&x.full_name===OWNER+'/'+x.name&&expected[x.name]===x.id)&&new Set(r.repositories.map(x=>x.id)).size===count;}
    function scopeMismatch(code,observed,expected){
     // Diagnostics never include raw API objects, IDs or credentials. A partial
@@ -190,13 +199,19 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
      actualRepositoriesComplete:Array.isArray(observed?.repositories)&&names.length===list.length&&observed.total_count===list.length};
     bad(code);
    }
-   // #22: cindy is optional while DD rolls it out to the App installations. Every required
-   // repository must be installed with its catalog ID; an optional one is accepted only with its
-   // catalog ID; any other repository, duplicate or incomplete listing is still a mismatch.
+   // 2026-11-15 (owner granted every App all repositories): the installation no longer has to
+   // equal the catalog. Repositories outside the catalog are ignored here and never reach a token;
+   // the target was already checked against the catalog before credentials (repoName).
+   // Still a mismatch: incomplete/malformed listing, entry not owned by the org, duplicate IDs,
+   // a catalog name present with a different ID, or a required catalog repository missing.
    function installedOptional(r,expected){
     if(!Array.isArray(r?.repositories)||r.total_count!==r.repositories.length)return null;
     const ids=new Set(),names=[];
-    for(const x of r.repositories){if(!obj(x)||typeof x.name!=='string'||x.full_name!==OWNER+'/'+x.name||!Object.hasOwn(expected,x.name)||expected[x.name]!==x.id||ids.has(x.id))return null;ids.add(x.id);names.push(x.name);}
+    for(const x of r.repositories){
+     if(!obj(x)||typeof x.name!=='string'||x.full_name!==OWNER+'/'+x.name||!Number.isSafeInteger(x.id)||ids.has(x.id))return null;ids.add(x.id);
+     if(!Object.hasOwn(expected,x.name))continue;
+     if(expected[x.name]!==x.id)return null;names.push(x.name);
+    }
     if(Object.keys(expected).some(n=>!OPTIONAL_REPOSITORIES.includes(n)&&!names.includes(n)))return null;
     return names.filter(n=>OPTIONAL_REPOSITORIES.includes(n));
    }
@@ -254,7 +269,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.map(r=>({id:r.id,full_name:r.full_name})),scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.filter(r=>Object.hasOwn(scope.installation,r.name)).map(r=>({id:r.id,full_name:r.full_name})),installationRepositorySelection:installation.repository_selection,installationRepositoryCount:probe.repositories.length,scopeRevision:policy.revision,expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
