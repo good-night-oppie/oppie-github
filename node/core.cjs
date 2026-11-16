@@ -66,11 +66,13 @@ function missingPermissions(actual,needed){
  return Object.entries(needed).filter(([k,v])=>PERMISSION_RANK[level(k)]<PERMISSION_RANK[v]).map(([permission,required])=>({permission,required,installed:level(permission)}));
 }
 // Installation: only an installation that lacks something this operation needs fails, and the
-// error says what is missing and where the owner adds it. Extra installation permissions are fine.
+// error says what is missing and where the owner adds it (the worker adds a Chinese message,
+// node/messages.cjs). Extra installation permissions are fine.
 function checkInstallation(actual,a,operation){
  const missing=missingPermissions(actual,permissions(a,operation));if(!missing.length)return;
- throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,
-  fix:'GitHub App '+a.app_name+' 的安装缺少：'+missing.map(m=>m.permission+':'+m.required+'（现为 '+m.installed+'）').join('，')+'。请主人在 App 设置的 Permissions 里加上（https://github.com/organizations/'+OWNER+'/settings/apps/'+a.app_slug+'/permissions），再到组织的安装页接受权限更新（https://github.com/organizations/'+OWNER+'/settings/installations/'+a.installation_id+'）。'});
+ const appPermissionsUrl='https://github.com/organizations/'+OWNER+'/settings/apps/'+a.app_slug+'/permissions',installationUrl='https://github.com/organizations/'+OWNER+'/settings/installations/'+a.installation_id;
+ throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,appPermissionsUrl,installationUrl,
+  fix:'Add '+missing.map(m=>m.permission+':'+m.required+' (installed: '+m.installed+')').join(', ')+' in the App permissions ('+appPermissionsUrl+') and accept the update on the installation page ('+installationUrl+').'});
 }
 // Execution token: must equal what was requested (nothing extra, nothing stronger); QQ's rule is unchanged.
 function checkTokenPermissions(actual,a,operation){
