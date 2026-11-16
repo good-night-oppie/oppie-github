@@ -639,7 +639,8 @@ var require_core = __commonJS({
               exact(args, ["number", "body"]);
               body = { body: nonempty(args.body, 65e3) };
               method = "POST";
-              route = root + "/issues/" + number() + "/comments";
+              preflight = { kind: "comment", number: number() };
+              route = root + "/issues/" + preflight.number + "/comments";
               break;
             case "get_pull":
               exact(args, ["number"]);
@@ -835,7 +836,8 @@ var require_core = __commonJS({
             { check: "repository_selection", expected: "selected or all", actual: shown(installation?.repository_selection), ok: ["selected", "all"].includes(installation?.repository_selection) },
             { check: "suspended", expected: "not suspended", actual: installation?.suspended_at ? "suspended" : "not suspended", ok: !installation?.suspended_at }
           ]);
-          const workflowFiles = workflowPaths(preflight), needed = workflowFiles.length ? { ...permissions(operation), workflows: "write" } : permissions(operation);
+          const workflowFiles = workflowPaths(preflight);
+          let needed = workflowFiles.length ? { ...permissions(operation), workflows: "write" } : permissions(operation);
           checkInstallation(installation.permissions, account, operation, installationId, needed, workflowFiles);
           async function listInstallation() {
             const probe = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
@@ -899,6 +901,28 @@ var require_core = __commonJS({
           }
           const tokenIds = [...new Set([...resolved.values()].map((r) => r.id))];
           if (["branch", "file", "edit", "commit"].includes(preflight?.kind) && (typeof resolved.get(repo).default_branch !== "string" || resolved.get(repo).default_branch === preflight.branch)) bad("DEFAULT_BRANCH_WRITE_REFUSED");
+          if (preflight?.kind === "comment" && !missingPermissions(installation.permissions, { pull_requests: "read" }).length) {
+            const probePermissions = { metadata: "read", pull_requests: "read" };
+            let probeResponse;
+            try {
+              probeResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repository_ids: tokenIds, permissions: probePermissions });
+            } catch (e) {
+              notInstalled(e);
+            }
+            const probeToken = validToken(probeResponse);
+            checkTokenPermissions(probeResponse.permissions, probePermissions);
+            let pull = null;
+            try {
+              pull = await api(root + "/pulls/" + preflight.number, probeToken);
+            } catch (e) {
+              if (!(e instanceof CoreError && e.status === 404)) throw e;
+            }
+            if (pull !== null && (!obj(pull) || pull.number !== preflight.number)) bad("INVALID_API_RESPONSE");
+            if (pull !== null) {
+              needed = { ...needed, pull_requests: "write" };
+              checkInstallation(installation.permissions, account, operation, installationId, needed);
+            }
+          }
           let tokenResponse;
           try {
             tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repository_ids: tokenIds, permissions: needed });
