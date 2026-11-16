@@ -69,7 +69,7 @@ function render() {
     tr.append(td(name + (enabled ? '' : '（停用）')));
     tr.append(td(a ? a.appName + ' · ' + a.appSlug + ' · App ' + a.appId + ' · 安装 ' + a.installationId : '内置'));
     const blocked = Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none');
-    tr.append(td((a ? roleText[a.role] + (a.operations ? '，' + a.operations.length + ' 项操作' : '') + (a.allowBroaderInstallation ? '，安装权限可更宽' : '') : '按代码')
+    tr.append(td((a ? roleText[a.role] + (a.operations ? '，' + a.operations.length + ' 项操作' : '') : '按代码')
       + (blocked.length ? '，不可用：' + blocked.join('、') : '')));
     tr.append(td(state.keys.includes(name) ? '已保存' : '未导入'));
     const actions = document.createElement('td');
@@ -134,7 +134,6 @@ function fillAccount(name) {
   $('#acc-name').value = name; $('#acc-app-name').value = a.appName; $('#acc-slug').value = a.appSlug;
   $('#acc-app-id').value = a.appId; $('#acc-install-id').value = a.installationId; $('#acc-role').value = a.role;
   for (const c of $('#acc-ops').querySelectorAll('input')) c.checked = !!a.operations?.includes(c.value);
-  $('#acc-broad').checked = a.allowBroaderInstallation === true;
   renderAccountRepos(new Set(Object.keys(draft.repositoryRoles).filter((r) => draft.repositoryRoles[r][name] === 'none')));
 }
 $('#acc-apply').onclick = () => {
@@ -158,7 +157,7 @@ $('#acc-apply').onclick = () => {
       if (!Object.keys(table).length && !state.config?.repositoryRoles?.[repo]) delete draft.repositoryRoles[repo];
     }
   }
-  draft.newAccounts[name] = { appId, installationId, appName, appSlug, role: $('#acc-role').value, ...(ops.length ? { operations: ops } : {}), ...($('#acc-broad').checked ? { allowBroaderInstallation: true } : {}) };
+  draft.newAccounts[name] = { appId, installationId, appName, appSlug, role: $('#acc-role').value, ...(ops.length ? { operations: ops } : {}) };
   if (!draft.accounts.includes(name)) draft.accounts.push(name);
   say('已放入待保存：' + name + '。点「保存」后生效。'); render();
 };
