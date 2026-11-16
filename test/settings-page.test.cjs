@@ -234,3 +234,21 @@ test('manifest whenToUse states the current ReviewInbox review events (owner dec
  const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../ghost.json'),'utf8'));
  assert.ok(!m.whenToUse.includes('仅作 COMMENT'));assert.match(m.whenToUse,/APPROVE/);
 });
+// QQ review of #33 (scope-loader.cjs:48): deleting both files after a save must not revert to defaults.
+test('signed configuration: deleting both files after a save fails closed; never saved still uses defaults',async t=>{
+ const {settings,loader,root,store}=await fixture(t);
+ // Never saved (only a key import in the audit): no files means the compiled defaults.
+ await store.writePrivate('scope-config-audit.jsonl',JSON.stringify({event:'import_key',account:'deja'})+'\n');
+ assert.equal((await loader()).revision,0);assert.equal((await settings.read()).source,'default');
+ const base=(await settings.read()).config;delete base.schemaVersion;delete base.revision;
+ const v1={...base,accounts:base.accounts.filter(a=>a!=='gg')};
+ const p1=await settings.propose({config:v1,expectedRevision:0});await settings.save({config:v1,expectedRevision:0,hash:p1.hash});
+ assert.equal((await loader()).accounts.includes('gg'),false);assert.equal((await settings.read()).source,'file');
+ fs.unlinkSync(path.join(root,'scope-config.json'));fs.unlinkSync(path.join(root,'scope-config.key'));
+ await assert.rejects(loader(),e=>e.code==='INVALID_SCOPE_CONFIGURATION'&&/deleted after a save/.test(e.reason));
+ const r=await settings.read();assert.equal(r.source,'invalid');assert.equal(r.config,null);
+ await assert.rejects(settings.propose({config:v1,expectedRevision:0}),{code:'INVALID_SCOPE_CONFIGURATION'});
+ // Documented residual risk: a same-user process that also deletes the audit log gets the defaults.
+ fs.unlinkSync(path.join(root,'scope-config-audit.jsonl'));
+ assert.equal((await loader()).accounts.includes('gg'),true);
+});
