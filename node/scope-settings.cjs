@@ -49,16 +49,23 @@ function describeInstallation(account,r){
 // card names the App, installation, repository count and the write permissions only; the full summary
 // (every permission, first repositories) is returned after the owner confirms.
 const CARD_MAX=220;
-function describeInstallationCard(account,r){
+function describeInstallationCard(account,r,fingerprint){
  const perms=Object.entries(r.installationPermissions||{});
  const writes=perms.filter(([,v])=>v==='write'||v==='admin').map(([k])=>String(k).slice(0,40));
  const repos=r.installationRepositories||{repositories:[]};
  const count=repos.repositories.length+(repos.complete?'':'+');
- const head='账号 '+account+'：App '+String(r.app_slug).slice(0,60)+'（ID '+r.app_id+'），安装 '+r.installation_id+'，'+(r.installationRepositorySelection==='all'?'全部仓库':'选定仓库')+' '+count+' 个，权限 '+perms.length+' 项';
+ const fp=typeof fingerprint==='string'&&/^[0-9a-f]{64}$/.test(fingerprint)?'，私钥指纹 '+fingerprint.slice(0,8)+'…'+fingerprint.slice(-4):'';
+ const head='账号 '+account+'：App '+String(r.app_slug).slice(0,60)+'（ID '+r.app_id+'）'+fp+'，安装 '+r.installation_id+'，'+(r.installationRepositorySelection==='all'?'全部仓库':'选定仓库')+' '+count+' 个，权限 '+perms.length+' 项';
  for(let n=writes.length;n>=0;n--){
   const text=head+(writes.length?'，其中可写：'+writes.slice(0,n).join('、')+(n<writes.length?' 等 '+writes.length+' 项':''):'');
   if(text.length<=CARD_MAX||n===0)return text.slice(0,CARD_MAX);
  }
+}
+// One proposal for both import paths (settings page and github_import_key, #38/#39): the full summary,
+// the short card the owner confirms, and the hash that binds the store step to those exact facts.
+function importProposal(account,fingerprint,r,replace){
+ const summary=describeInstallation(account,r);
+ return {summary,card:describeInstallationCard(account,r,fingerprint),hash:sha256(canonical({account,fingerprint,summary,replace:replace===true}))};
 }
 function createSettings({store,loader,verifyKey}){
  async function current(){
@@ -126,9 +133,8 @@ function createSettings({store,loader,verifyKey}){
    const config=await loader.load();
    verification=await verifyKey({account:args.account,pem,config});
    if(!verification?.ok)return {ok:false,errorCode:verification?.errorCode||'IDENTITY_VERIFICATION_FAILED',execution:'not_executed',...(verification?.details?{details:verification.details}:{})};
-   const r=verification.result,summary=describeInstallation(args.account,r);
-   const hash=sha256(canonical({account:args.account,fingerprint,summary,replace:args.replace===true}));
-   if((args.phase??'store')==='inspect')return {ok:true,account:args.account,summary,card:describeInstallationCard(args.account,r),hash};
+   const r=verification.result,{summary,card,hash}=importProposal(args.account,fingerprint,r,args.replace);
+   if((args.phase??'store')==='inspect')return {ok:true,account:args.account,summary,card,hash};
    if(args.hash!==hash)fail('PROPOSAL_CHANGED');
    const imported=await store.importKeyText({account:args.account,pem_text:pem,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:r.warnings?.length?{}:{appSlug:r.app_slug}});
    await audit({event:'import_key',account:args.account,fingerprint:imported.fingerprint,summary});
@@ -137,4 +143,4 @@ function createSettings({store,loader,verifyKey}){
  }
  return {read,propose,save,importKey};
 }
-module.exports={describeInstallationCard,createSettings,summarize,describeInstallation,canonical,AUDIT_FILE};
+module.exports={importProposal,describeInstallationCard,createSettings,summarize,describeInstallation,canonical,AUDIT_FILE};
