@@ -6,13 +6,13 @@ const BASIC={contents:'write',issues:'write',pull_requests:'write',metadata:'rea
 const pem=crypto.generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
 const NOW=Date.parse('2026-11-10T23:00:00Z');
 const rows=(map=CATALOG)=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({id,name,full_name:'good-night-oppie/'+name}))});
-function fixture(account,{installationPermissions=BASIC,executionPermissions=BASIC,installationRows=rows(),executionRows=rows(CATALOG)}={}){
+function fixture(account,{installationPermissions=BASIC,executionPermissions,installationRows=rows(),executionRows=rows(CATALOG)}={}){
  const calls=[];let keyReads=0;const a=ACCOUNTS[account];
  const client=createClient({now:()=>NOW,credentials:async()=>{keyReads++;return pem;},fetch:async(url,init)=>{
   const route=new URL(url).pathname,body=init.body?JSON.parse(init.body):null;calls.push({route,body});let data;
   if(route==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(route==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',permissions:installationPermissions};
-  else if(route.endsWith('/access_tokens'))data={token:body.repository_ids?'exec':'probe',expires_at:new Date(NOW+600000).toISOString(),permissions:body.repository_ids?executionPermissions:{metadata:'read'}};
+  else if(route.endsWith('/access_tokens'))data={token:body.repository_ids?'exec':'probe',expires_at:new Date(NOW+600000).toISOString(),permissions:body.repository_ids?(executionPermissions??body.permissions):{metadata:'read'}};
   else if(route==='/installation/repositories')data=init.headers.Authorization==='Bearer probe'?installationRows:executionRows;
   else if(route.startsWith('/repos/')&&route.endsWith('/issues'))data={number:1};
   else throw Error('Unexpected mock request');
@@ -26,7 +26,7 @@ for(const account of ['video','vv']){
    const f=fixture(account),r=await f.client.run({account,repo,operation:'create_issue',args:{title:'synthetic test'}});
    assert.equal(r.ok,true,repo+': '+r.errorCode);
    const mint=f.calls.filter(c=>c.route.endsWith('/access_tokens')).at(-1);
-   assert.deepEqual(mint.body,{repository_ids:Object.values(CATALOG),permissions:BASIC});
+   assert.deepEqual(mint.body,{repository_ids:Object.values(CATALOG),permissions:{...BASIC,contents:'read'}});
    assert.equal(f.calls.filter(c=>c.route.startsWith('/repos/')).length,1);
   }
  });
@@ -55,20 +55,23 @@ test('PG installation accepts sufficient ordinary permissions and additional gra
   assert.equal(r.ok,true,r.errorCode);assert.deepEqual(r.result.permissions,BASIC);
   const mints=f.calls.filter(c=>c.route.endsWith('/access_tokens'));
   assert.deepEqual(mints[0].body.permissions,{metadata:'read'});
-  assert.deepEqual(mints[1].body.permissions,BASIC);
+  assert.deepEqual(mints[1].body.permissions,{...BASIC,contents:'read'});
  }
 });
 test('PG installation refuses missing, weak and unknown required permission levels',async()=>{
- for(const key of Object.keys(BASIC))for(const value of [undefined,'none','unknown',...(BASIC[key]==='write'?['read']:[])]){
+ // identity needs contents:read only; a contents:read installation is covered by the write case below.
+ for(const key of Object.keys(BASIC))for(const value of [undefined,'none','unknown',...(BASIC[key]==='write'&&key!=='contents'?['read']:[])]){
   const installationPermissions={...BASIC,administration:'write',actions:'write'};
   if(value===undefined)delete installationPermissions[key];else installationPermissions[key]=value;
   const f=fixture('pg',{installationPermissions}),r=await f.client.run({account:'pg',repo:'MontClip',operation:'identity'});
-  assert.equal(r.errorCode,'PERMISSION_MISMATCH',key+': '+value);
+  assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING',key+': '+value);
   assert.equal(f.calls.some(c=>c.route.endsWith('/access_tokens')),false);
  }
+ const w=fixture('pg',{installationPermissions:{...BASIC,contents:'read'}}),r=await w.client.run({account:'pg',repo:'MontClip',operation:'create_branch',args:{branch:'pg/x',sha:'a'.repeat(40)}});
+ assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.equal(w.calls.some(c=>c.route.endsWith('/access_tokens')),false);
 });
 test('PG execution rejects additional grants, missing permissions and stronger metadata',async()=>{
- for(const executionPermissions of [{...BASIC,administration:'write'},{...BASIC,actions:'read'},{...BASIC,metadata:'write'},{...BASIC,contents:'read'},{contents:'write',issues:'write',metadata:'read'}]){
+ for(const executionPermissions of [{...BASIC,administration:'write'},{...BASIC,actions:'read'},{...BASIC,metadata:'write'},{...BASIC,contents:'write'},{contents:'read',issues:'write',metadata:'read'}]){
   const f=fixture('pg',{installationPermissions:{...BASIC,administration:'write',actions:'write'},executionPermissions});
   const r=await f.client.run({account:'pg',repo:'MontClip',operation:'create_issue',args:{title:'synthetic test'}});
   assert.equal(r.errorCode,'PERMISSION_MISMATCH');
@@ -83,11 +86,13 @@ test('PG installation superset does not grant administrative operations',async()
   assert.equal(r.ok,false);assert.equal(r.execution,'not_executed');assert.equal(f.keyReads(),0);assert.equal(f.calls.length,0);
  }
 });
-test('ordinary accounts other than PG still refuse unexpected installation privileges',async()=>{
+// Owner 2026-11-16 (via QQ): every account now follows its actual installation, like PG; extra
+// installation permissions are never requested on the execution token.
+test('ordinary accounts accept extra installation permissions without forwarding them',async()=>{
  for(const account of ['bb','cindy','deja','dd','gg','jj','rea','video','vv']){
   const f=fixture(account,{installationPermissions:{...BASIC,actions:'write'}});
   const r=await f.client.run({account,repo:'MontClip',operation:'identity'});
-  assert.equal(r.errorCode,'PERMISSION_MISMATCH');assert.equal(f.calls.some(c=>c.route.endsWith('/access_tokens')),false);
+  assert.equal(r.ok,true,account+': '+r.errorCode);assert.deepEqual(f.calls.filter(c=>c.route.endsWith('/access_tokens')).at(-1).body.permissions,{...BASIC,contents:'read'});
  }
 });
 
@@ -95,7 +100,7 @@ test('PG installation rejects prototype names and non-string required permission
  for(const value of ['__proto__','constructor','toString',['write'],{},null,2]){
   const f=fixture('pg',{installationPermissions:{...BASIC,contents:value}});
   const r=await f.client.run({account:'pg',repo:'MontClip',operation:'identity'});
-  assert.equal(r.errorCode,'PERMISSION_MISMATCH',JSON.stringify(value));
+  assert.equal(r.errorCode,'INSTALLATION_PERMISSION_MISSING',JSON.stringify(value));
   assert.equal(f.calls.some(c=>c.route.endsWith('/access_tokens')),false);
  }
 });
