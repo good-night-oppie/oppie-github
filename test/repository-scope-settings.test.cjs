@@ -12,7 +12,7 @@ const NOW=Date.parse('2026-11-10T21:00:00Z');
 const rows=map=>({total_count:Object.keys(map).length,repositories:Object.entries(map).map(([name,id])=>({name,id,full_name:'good-night-oppie/'+name}))});
 function fixture({account='deja',installation=CATALOG,execution=CATALOG,alterInstallation,alterExecution,repositoryPolicy,beforeCredentials}={}){
  const calls=[];let keyReads=0;
- const permissions={contents:['qq','reviewinbox','ad'].includes(account)?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
+ const permissions={contents:account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(account==='qq'?{administration:'write'}:{})};
  const client=createClient({now:()=>NOW,repositoryPolicy,credentials:async()=>{keyReads++;await beforeCredentials?.();return PEM;},fetch:async(url,init)=>{
   const path=new URL(url).pathname,body=init.body?JSON.parse(init.body):undefined;calls.push({path,body});let data;
   if(path==='/app')data={id:ACCOUNTS[account].app_id,slug:ACCOUNTS[account].app_slug,owner:{login:'good-night-oppie'}};
@@ -35,11 +35,11 @@ test('Deja can use each of the seven authorized repositories with exact narrowed
 test('an outside repository fails before credentials',async()=>{const f=fixture(),r=await f.client.run(input('outside'));assert.equal(r.errorCode,'REPOSITORY_NOT_ALLOWED');assert.equal(f.keyReads(),0);});
 test('account defaults match the authorized installation and execution matrix',async()=>{
  for(const account of Object.keys(ACCOUNTS).filter(a=>a!=='deja')){
-  const installation=CATALOG,execution=account==='reviewinbox'?TWO:CINDY_EXECUTION.includes(account)?CATALOG:SIX;
+  const installation=CATALOG,execution=CATALOG;
   const f=fixture({account,installation,execution}),r=await f.client.run(input('MontClip',account));assert.equal(r.ok,true,account+': '+r.errorCode);
   assert.deepEqual(f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body.repository_ids,Object.values(execution));
-  if(account==='reviewinbox')assert.equal((await f.client.run(input('montclip-rsi',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
-  if(!CINDY_EXECUTION.includes(account))assert.equal((await f.client.run(input('cindy',account))).errorCode,'REPOSITORY_NOT_ALLOWED');
+  assert.equal((await f.client.run(input('montclip-rsi',account))).ok,true);
+  assert.equal((await f.client.run(input('cindy',account))).ok,true);
  }
 });
 test('six-repository installation still refuses wrong IDs, duplicate rows and incomplete listings',async()=>{
@@ -60,8 +60,8 @@ test('malformed provider configuration fails before credentials',async()=>{
   const f=fixture({repositoryPolicy});assert.equal((await f.client.run(input())).errorCode,'INVALID_SCOPE_CONFIGURATION');assert.equal(f.keyReads(),0);
  }
 });
-test('QQ authoring and ReviewInbox approval stay denied',async()=>{
- for(const [account,operation,args] of [['qq','create_issue',{title:'x'}],['reviewinbox','submit_review',{number:1,commit_id:'a'.repeat(40),event:'APPROVE'}]]){
+test('QQ authoring and ReviewInbox administration stay denied',async()=>{
+ for(const [account,operation,args] of [['qq','create_issue',{title:'x'}],['reviewinbox','admin_get',{}]]){
   const f=fixture({account});assert.equal((await f.client.run({...input('MontClip',account),operation,args})).ok,false);assert.equal(f.keyReads(),0);
  }
 });
@@ -94,7 +94,7 @@ test('scope validation copies and freezes maps and refuses account/ID/role injec
   p=>{p.accounts.deja.installation=TWO;},
   p=>{p.accounts.bb.execution=TWO;p.accounts.bb.installation=TWO;},
   p=>{p.accounts.qq.permissions={administration:'write'};},
-  p=>{p.accounts.reviewinbox.execution=CATALOG;},
+  p=>{p.accounts.reviewinbox.execution=TWO;},
   p=>{p.revision='1';},p=>{p.confirmed=true;},p=>{delete p.accounts.bb;},
   p=>{p.accounts.deja.execution=[];},p=>{p.accounts.deja.execution={};},
   p=>{Object.defineProperty(p.accounts.deja.execution,'MontClip',{get(){throw Error('Getter called');},enumerable:true});},

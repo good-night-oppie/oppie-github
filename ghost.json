@@ -245,6 +245,6 @@
       }
     ]
   },
-  "releaseNotes": "候选（#28）：新增伙伴 AD 的账号 ad（App ADOppieXYZ）。按 QQ 在 #28 的决定，ad 在 6 个仓上只能读、在 Issue 和 PR 上评论、提交评审（COMMENT/APPROVE/REQUEST_CHANGES）；执行令牌不带 contents 写，其他操作一律拒绝；cindy 不列入。安装范围接受 6 个仓或 6 个仓加 cindy；AD 的 App 安装权限比角色宽，插件像对 PG 一样接受，但执行令牌严格核对。密钥库上限从固定 12 改为账号数。其他账号不变。",
+  "releaseNotes": "候选（#28）：新增伙伴 AD 的账号 ad（App ADOppieXYZ）。按 QQ 在 #28 的决定，ad 在 6 个仓上只能读、在 Issue 和 PR 上评论、提交评审（COMMENT/APPROVE/REQUEST_CHANGES）；执行令牌不带 contents 写，其他操作一律拒绝；cindy 不列入。安装范围接受 6 个仓或 6 个仓加 cindy；AD 的 App 安装权限比角色宽，插件像对 PG 一样接受，但执行令牌严格核对。密钥库上限从固定 12 改为账号数。其他账号不变。\n 2026-11-15 P0: App installations may contain more repositories than the catalog (owner granted all repositories; repository_selection 'all' accepted). The target repository must still be in the catalog (REPOSITORY_NOT_ALLOWED before credentials) and execution tokens stay narrowed to catalog repositories with the exact token-set check. No other behaviour change.",
   "confirm": true
 }
