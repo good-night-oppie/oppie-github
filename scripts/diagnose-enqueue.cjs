@@ -4,7 +4,6 @@
 //   node scripts/diagnose-enqueue.cjs --enqueue <n> <sha>  also ONE real enqueue_pull on MontClip#n via this branch's core
 const store=require('../node/store.cjs');
 const {createClient,makeJwt,ACCOUNTS}=require('../node/core.cjs');
-const {initialPolicy}=require('../node/repository-policy.cjs');
 const qq=ACCOUNTS.qq;
 async function call(path,token,method='GET',body){
  const r=await fetch('https://api.github.com'+path,{method,redirect:'error',headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'oppie-github-diagnose-16',Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
@@ -22,7 +21,7 @@ async function call(path,token,method='GET',body){
  if(i>0){
   const number=Number(process.argv[i+1]),sha=process.argv[i+2];
   const logged=async(url,init)=>{const r=await fetch(url,init);if(new URL(url).pathname==='/graphql'){const text=await r.clone().text();let q='';try{q=JSON.parse(init.body).query.slice(0,40);}catch(_){}console.log('   graphql',q,'-> HTTP',r.status,redact((()=>{try{return JSON.parse(text);}catch(_){return text.slice(0,500);}})()));}return r;};
-  const client=createClient({repositoryPolicy:initialPolicy,credentials:async()=>(await store.load('qq')).privateKey,fetch:logged});
+  const client=createClient({credentials:async()=>(await store.load('qq')).privateKey,fetch:logged});
   console.log('3) enqueue_pull MontClip#'+number,sha);
   console.log('   result =',redact(await client.run({account:'qq',repo:'MontClip',operation:'enqueue_pull',args:{number,commit_id:sha}})));
  }
