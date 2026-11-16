@@ -847,25 +847,52 @@ var require_core = __commonJS({
           const proofRepo = preflight?.kind === "owner_reference" ? preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\//)?.[1] : null;
           if (preflight?.kind === "owner_reference" && (!proofRepo || ![repo, "MontClip"].includes(proofRepo))) bad("OWNER_REFERENCE_SCOPE");
           const tokenRepos = [.../* @__PURE__ */ new Set([repo, ...proofRepo ? [proofRepo] : []])];
+          const notInstalled = (e) => {
+            if (e instanceof CoreError && [404, 422].includes(e.status)) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", e.status, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
+            throw e;
+          };
+          const validToken = (r) => {
+            if (typeof r?.token !== "string" || !r.token || Date.parse(r.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(r.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
+            secrets.push(r.token);
+            return r.token;
+          };
+          let resolveResponse;
+          try {
+            resolveResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: { metadata: "read" } });
+          } catch (e) {
+            notInstalled(e);
+          }
+          const resolveToken = validToken(resolveResponse);
+          checkTokenPermissions(resolveResponse.permissions, { metadata: "read" });
+          const resolved = /* @__PURE__ */ new Map();
+          for (const n of tokenRepos) {
+            let r;
+            try {
+              r = await api("/repos/" + OWNER + "/" + n, resolveToken);
+            } catch (e) {
+              notInstalled(e);
+            }
+            if (!obj(r) || !Number.isSafeInteger(r.id) || r.id < 1 || typeof r.name !== "string" || r.name.toLowerCase() !== n.toLowerCase() || r.owner?.login !== OWNER || r.full_name !== OWNER + "/" + r.name) bad("REPOSITORY_RESOLUTION_FAILED");
+            resolved.set(n, r);
+          }
+          const tokenIds = [...new Set([...resolved.values()].map((r) => r.id))];
+          if (["branch", "file", "edit", "commit"].includes(preflight?.kind) && (typeof resolved.get(repo).default_branch !== "string" || resolved.get(repo).default_branch === preflight.branch)) bad("DEFAULT_BRANCH_WRITE_REFUSED");
           let tokenResponse;
           try {
-            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: needed });
+            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repository_ids: tokenIds, permissions: needed });
           } catch (e) {
-            if (e instanceof CoreError && e.status === 422) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", 422, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
-            throw e;
+            notInstalled(e);
           }
-          if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
-          const token = tokenResponse.token;
-          secrets.push(token);
+          const token = validToken(tokenResponse);
           checkTokenPermissions(tokenResponse.permissions, needed);
           const repos = await api("/installation/repositories?per_page=100", token);
-          const exactRepos = (r) => r?.total_count === tokenRepos.length && Array.isArray(r.repositories) && r.repositories.length === tokenRepos.length && r.repositories.every((x) => obj(x) && tokenRepos.includes(x.name) && x.full_name === OWNER + "/" + x.name && Number.isSafeInteger(x.id)) && new Set(r.repositories.map((x) => x.name)).size === tokenRepos.length;
+          const exactRepos = (r) => r?.total_count === tokenIds.length && Array.isArray(r.repositories) && r.repositories.length === tokenIds.length && r.repositories.every((x) => obj(x) && tokenIds.includes(x.id) && x.full_name === OWNER + "/" + x.name && [...resolved.values()].some((v) => v.id === x.id && v.full_name === x.full_name)) && new Set(r.repositories.map((x) => x.id)).size === tokenIds.length;
           if (!exactRepos(repos)) {
             const list = Array.isArray(repos?.repositories) ? repos.repositories : [];
             scopeDiagnostics = { expectedRepositories: tokenRepos.map((n) => OWNER + "/" + n), actualRepositories: list.slice(0, 100).map((r) => r?.full_name).filter((n) => typeof n === "string" && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(n)) };
             bad("EXECUTION_REPOSITORY_SCOPE_MISMATCH");
           }
-          const target = repos.repositories.find((x) => x.name === repo);
+          const target = repos.repositories.find((x) => x.id === resolved.get(repo).id);
           if (preflight?.kind === "owner_reference") {
             const match = preflight.url.match(/^https:\/\/github\.com\/good-night-oppie\/([^/]+)\/(?:issues|pull)\/[0-9]+#issuecomment-([0-9]+)$/);
             if (!match || match[1] !== proofRepo) bad("OWNER_REFERENCE_SCOPE");
@@ -891,8 +918,6 @@ var require_core = __commonJS({
             if (pr?.state !== "open" || pr?.draft) bad("PR_NOT_REVIEWABLE");
           }
           if (["branch", "file", "edit", "commit"].includes(preflight?.kind)) {
-            const metadata = await api(root, token);
-            if (metadata?.default_branch === preflight.branch) bad("DEFAULT_BRANCH_WRITE_REFUSED");
             if (["file", "edit"].includes(preflight.kind)) {
               let current;
               try {
