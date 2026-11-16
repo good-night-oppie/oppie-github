@@ -290,7 +290,8 @@ var require_scope_config = __commonJS({
       newAccounts: Object.freeze({})
     });
     var BUILTIN_ACCOUNTS = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
-    var ROLES = Object.freeze(["write", "review", "comment_review"]);
+    var ROLES = Object.freeze(["write", "reviewer", "review", "comment_review"]);
+    var REPOSITORY_ROLES = Object.freeze([...ROLES, "none"]);
     var KEYS = Object.freeze(["schemaVersion", "revision", "repositories", "optionalRepositories", "accounts", "twoRepositories", "repositoryRoles", "reviewOperations", "newAccounts"]);
     var REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/;
     var ACCOUNT_NAME = /^[a-z][a-z0-9-]{0,31}$/;
@@ -353,7 +354,7 @@ var require_scope_config = __commonJS({
         const seenApps = /* @__PURE__ */ new Set(), seenInstalls = /* @__PURE__ */ new Set();
         for (const [name, a] of Object.entries(raw.newAccounts)) {
           if (!ACCOUNT_NAME.test(name) || BUILTIN_ACCOUNTS.includes(name)) invalid("newAccounts name " + name);
-          if (!plain(a) || Object.keys(a).some((k) => !["appId", "installationId", "appName", "appSlug", "role", "operations"].includes(k))) invalid("newAccounts " + name);
+          if (!plain(a) || Object.keys(a).some((k) => !["appId", "installationId", "appName", "appSlug", "role", "operations", "allowBroaderInstallation"].includes(k))) invalid("newAccounts " + name);
           id(a.appId, "appId");
           id(a.installationId, "installationId");
           if (BUILTIN_APP_IDS.includes(a.appId) || BUILTIN_INSTALLATION_IDS.includes(a.installationId)) invalid("newAccounts " + name + " reuses a compiled App or installation");
@@ -367,10 +368,11 @@ var require_scope_config = __commonJS({
           }
           const role = a.role === void 0 ? "review" : a.role;
           if (!ROLES.includes(role)) invalid("role");
+          if (a.allowBroaderInstallation !== void 0 && typeof a.allowBroaderInstallation !== "boolean") invalid("allowBroaderInstallation");
           if (seenApps.has(a.appId) || seenInstalls.has(a.installationId)) invalid("newAccounts duplicate id");
           seenApps.add(a.appId);
           seenInstalls.add(a.installationId);
-          newAccounts[name] = Object.freeze({ appId: a.appId, installationId: a.installationId, appName: a.appName, appSlug, role, ...operations ? { operations } : {} });
+          newAccounts[name] = Object.freeze({ appId: a.appId, installationId: a.installationId, appName: a.appName, appSlug, role, ...operations ? { operations } : {}, ...a.allowBroaderInstallation === true ? { allowBroaderInstallation: true } : {} });
         }
       }
       const known = [...BUILTIN_ACCOUNTS, ...Object.keys(newAccounts)];
@@ -383,17 +385,18 @@ var require_scope_config = __commonJS({
         if (!Object.hasOwn(repositories, repo) || !plain(table)) invalid("repositoryRoles " + repo);
         const t = {};
         for (const [acct, role] of Object.entries(table)) {
-          if (!known.includes(acct) || !ROLES.includes(role)) invalid("repositoryRoles " + repo + "." + acct);
+          if (!known.includes(acct) || !REPOSITORY_ROLES.includes(role)) invalid("repositoryRoles " + repo + "." + acct);
           t[acct] = role;
         }
         repositoryRoles[repo] = Object.freeze(t);
       }
+      for (const acct of accounts) if (Object.keys(repositories).every((r) => repositoryRoles[r]?.[acct] === "none")) invalid("account " + acct + " has no usable repository");
       const reviewOperations = raw.reviewOperations === void 0 ? DEFAULTS.reviewOperations : names(raw.reviewOperations, "reviewOperations", /^[a-z_]{1,40}$/, 40);
       if (!reviewOperations.includes("identity") || reviewOperations.some((o) => !REVIEW_OPERATION_CEILING.includes(o))) invalid("reviewOperations must be a subset of the compiled review operations and include identity");
       return Object.freeze({ schemaVersion: 1, revision, repositories, optionalRepositories, accounts, twoRepositories, repositoryRoles: Object.freeze(repositoryRoles), reviewOperations, newAccounts: Object.freeze(newAccounts) });
     }
     var DEFAULT_CONFIG = validateConfig({});
-    module2.exports = { OWNER, DEFAULTS, DEFAULT_CONFIG, BUILTIN_ACCOUNTS, BUILTIN_APP_IDS, BUILTIN_INSTALLATION_IDS, ACCOUNT_OPERATION_CEILING, REVIEW_OPERATION_CEILING, MAX_FILE_BYTES, validateConfig };
+    module2.exports = { OWNER, DEFAULTS, DEFAULT_CONFIG, BUILTIN_ACCOUNTS, BUILTIN_APP_IDS, BUILTIN_INSTALLATION_IDS, ACCOUNT_OPERATION_CEILING, REVIEW_OPERATION_CEILING, MAX_FILE_BYTES, ROLES, REPOSITORY_ROLES, validateConfig };
   }
 });
 
@@ -414,6 +417,8 @@ var require_repository_policy = __commonJS({
       const table = Object.hasOwn(config.repositoryRoles, repo) ? config.repositoryRoles[repo] : null;
       const role = table && Object.hasOwn(table, account) ? table[account] : Object.hasOwn(config.newAccounts, account) ? config.newAccounts[account].role : "write";
       if (role === "write") return null;
+      if (role === "none") return Object.freeze({ operations: Object.freeze([]), commentOnly: false, none: true });
+      if (role === "reviewer") return Object.freeze({ operations: Object.freeze([.../* @__PURE__ */ new Set([...config.reviewOperations, "comment_issue"])]), commentOnly: false });
       return Object.freeze({ operations: config.reviewOperations, commentOnly: role === "comment_review" });
     }
     function invalid() {
@@ -440,7 +445,7 @@ var require_repository_policy = __commonJS({
       return Object.freeze(selected);
     }
     function baseline(account, config) {
-      return { installation: config.repositories, execution: config.repositories };
+      return { installation: config.repositories, execution: Object.freeze(Object.fromEntries(Object.entries(config.repositories).filter(([r]) => config.repositoryRoles[r]?.[account] !== "none"))) };
     }
     function sameMap(a, b) {
       return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
@@ -508,13 +513,16 @@ var require_core = __commonJS({
       allowed_slugs: Object.freeze(account === "reviewinbox" ? ["reviewinboxoppiexyz"] : ["oppie-agent-" + account, APP_NAMES[account].toLowerCase()]),
       admin: account === "qq"
     })])));
+    var CONTENT_WRITE_OPERATIONS = Object.freeze(["create_branch", "update_file", "edit_file", "commit_files"]);
     function configuredAccount(name, config = DEFAULT_CONFIG) {
       if (typeof name !== "string" || !config.accounts.includes(name)) return null;
       if (Object.hasOwn(ACCOUNTS, name)) return ACCOUNTS[name];
       const a = Object.hasOwn(config.newAccounts, name) ? config.newAccounts[name] : null;
       if (!a) return null;
       const slug = a.appSlug || a.appName.toLowerCase();
-      return Object.freeze({ account: name, app_id: a.appId, installation_id: a.installationId, app_name: a.appName, app_slug: slug, app_slug_status: "expected_not_live", allowed_slugs: Object.freeze([.../* @__PURE__ */ new Set([slug, "oppie-agent-" + name])]), admin: false, configured: true, operations: a.operations || null });
+      const mayWrite = a.role === "write" || Object.values(config.repositoryRoles).some((t) => t[name] === "write");
+      const contentsWrite = mayWrite && (!a.operations || a.operations.some((o) => CONTENT_WRITE_OPERATIONS.includes(o)));
+      return Object.freeze({ account: name, app_id: a.appId, installation_id: a.installationId, app_name: a.appName, app_slug: slug, app_slug_status: "expected_not_live", allowed_slugs: Object.freeze([.../* @__PURE__ */ new Set([slug, "oppie-agent-" + name])]), admin: false, configured: true, role: a.role, operations: a.operations || null, contents_write: contentsWrite, allow_broader_installation: a.allowBroaderInstallation === true });
     }
     function allowedAppSlug(account, slug) {
       return typeof slug === "string" && Object.hasOwn(ACCOUNTS, account) && ACCOUNTS[account].allowed_slugs.includes(slug);
@@ -578,11 +586,11 @@ var require_core = __commonJS({
       return n;
     }
     function permissions(a, operation) {
-      return { contents: a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
+      return { contents: a.configured ? a.contents_write ? "write" : "read" : a.account === "qq" && operation === "enqueue_pull" ? "write" : a.account === "qq" ? "read" : "write", issues: "write", pull_requests: "write", metadata: "read", ...a.admin ? { administration: "write" } : {} };
     }
     function checkPermissions(actual, a, phase = "execution", operation) {
       const expected = permissions(a, operation), rank = { none: 0, read: 1, write: 2 };
-      const pgInstallation = phase === "installation" && a.account === "pg";
+      const pgInstallation = phase === "installation" && (a.account === "pg" || a.configured === true && a.allow_broader_installation === true);
       const allowSuperset = a.account === "qq" || pgInstallation;
       if (pgInstallation && (!obj(actual) || Object.keys(expected).some((k) => typeof actual[k] !== "string" || !Object.hasOwn(rank, actual[k])))) bad("PERMISSION_MISMATCH");
       if (!obj(actual) || Object.entries(expected).some(([k, v]) => allowSuperset ? (rank[actual[k]] ?? -1) < rank[v] : actual[k] !== v) || !allowSuperset && Object.entries(actual).some(([k, v]) => v !== "none" && !Object.hasOwn(expected, k))) bad("PERMISSION_MISMATCH");
@@ -687,6 +695,7 @@ var require_core = __commonJS({
           if (!obj(args)) bad();
           const restriction = repositoryRestriction(account.account, repo, config);
           if (restriction) {
+            if (restriction.none) bad("REPOSITORY_NOT_ALLOWED");
             if (!restriction.operations.includes(operation)) bad("REVIEW_ONLY_REPOSITORY");
             if (restriction.commentOnly && operation === "submit_review" && args.event !== "COMMENT") bad("COMMENT_ONLY_REVIEWER");
           }
