@@ -15,6 +15,7 @@ test('actual worker dispatcher refuses injected scope/owner flags and unpublishe
   if(name==='./core.cjs')return require('../node/core.cjs');
   if(name==='./review-queue.cjs')return {createQueue:()=>({})};
   if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>({ok:false}),stop:async()=>({ok:true})})};
+  if(name==='./messages.cjs')return require('../node/messages.cjs');
   if(name==='./deployment.cjs')return {createDeploymentReader:()=>async()=>({accounts:['bb','deja','qq','reviewinbox'],automaticReviews:false})};
   if(name==='./repository-policy.cjs')return require('../node/repository-policy.cjs');
   if(name==='./operations.cjs')return {};
