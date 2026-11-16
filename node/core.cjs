@@ -45,6 +45,12 @@ const OPERATION_NEEDS=Object.freeze({
 const OPERATION_NAMES = Object.freeze(Object.keys(OPERATION_NEEDS));
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
+// Plain-language error step (PG design review #8 step 1): failures carry which check failed; the
+// worker turns them into Chinese text (node/messages.cjs). Decisions are unchanged. Details hold only
+// public identifiers (App/installation IDs, slugs, logins), never keys, key paths or tokens.
+const printable=s=>[...s].map(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127?' ':c).join('');
+function configFailure(e){const reason=typeof e?.reason==='string'?printable(e.reason).slice(0,200):undefined;throw new CoreError('INVALID_SCOPE_CONFIGURATION','not_executed',undefined,reason?{reason}:undefined);}
+function checksFailed(code,checks){const failed=checks.filter(c=>!c.ok).map(({ok,...c})=>c);if(failed.length)throw new CoreError(code,'not_executed',undefined,{failed});}
 function configDigest(c){return crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0,16);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
@@ -112,7 +118,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
   try{
    if(Buffer.byteLength(JSON.stringify(input??null),'utf8')>MAX_OPERATION_BYTES)bad('REQUEST_TOO_LARGE');
    exact(input,['account','repo','operation','args']);
-   let config;try{config=await scopeConfig();}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   let config;try{config=await scopeConfig();}catch(e){configFailure(e);}
    const account=configuredAccount(input.account,config);if(!account)bad('ACCOUNT_REQUIRED');const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    // Owner 2026-11-16: no role, operation or repository list in the plugin. Any repository of the
@@ -189,7 +195,11 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    secrets.push(pem);const jwt=makeJwt(account,pem,now());secrets.push(jwt);pem=null;
    const app=await api('/app',jwt);
    // Identity never follows a matching name alone: App ID and owner stay pinned.
-   if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
+   const shown=v=>typeof v==='string'||Number.isSafeInteger(v)?String(v).slice(0,100):v===undefined||v===null?'missing':'invalid';
+   checksFailed('APP_IDENTITY_MISMATCH',[
+    {check:'app_id',expected:String(account.app_id),actual:shown(app?.id),ok:Number(app?.id)===account.app_id},
+    {check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug),ok:typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)},
+    {check:'app_owner',expected:OWNER,actual:shown(app?.owner?.login),ok:app?.owner?.login===OWNER}]);
    // Compiled accounts keep their pinned installation; accounts added in the settings page use the
    // App's single installation in good-night-oppie, looked up now (follows GitHub on every call).
    let installation;
@@ -201,7 +211,13 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     installation=mine[0];
    }
    const installationId=account.installation_id||Number(installation?.id);
-   if(!Number.isSafeInteger(installationId)||Number(installation?.id)!==installationId||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
+   checksFailed('INSTALLATION_MISMATCH',[
+    {check:'installation_id',expected:account.installation_id?String(account.installation_id):'the App installation in '+OWNER,actual:shown(installation?.id),ok:Number.isSafeInteger(installationId)&&Number(installation?.id)===installationId},
+    {check:'installation_app_id',expected:String(account.app_id),actual:shown(installation?.app_id),ok:Number(installation?.app_id)===account.app_id},
+    {check:'installation_owner',expected:OWNER,actual:shown(installation?.account?.login),ok:installation?.account?.login===OWNER},
+    {check:'installation_owner_type',expected:'Organization',actual:shown(installation?.account?.type),ok:installation?.account?.type==='Organization'},
+    {check:'repository_selection',expected:'selected or all',actual:shown(installation?.repository_selection),ok:['selected','all'].includes(installation?.repository_selection)},
+    {check:'suspended',expected:'not suspended',actual:installation?.suspended_at?'suspended':'not suspended',ok:!installation?.suspended_at}]);
    // The installation may hold more than this operation needs (and usually does); only a lack fails.
    const workflowFiles=workflowPaths(preflight),needed=workflowFiles.length?{...permissions(operation),workflows:'write'}:permissions(operation);
    checkInstallation(installation.permissions,account,operation,installationId,needed,workflowFiles);
