@@ -33,9 +33,10 @@ Requires Cindy 0.1.136 (verified against tag v0.1.136, commit 7227e8311a2d782f39
 
 `<plugin private store>/scope-config.json` — the same directory as the encrypted key store (`github_accounts` reports the exact path as `scopeConfig.path`). On Windows this is under the user's profile with an owner-only ACL.
 
-- Missing file (never saved): compiled defaults (identical to 1.5.0-preview.8-seven-roles.2).
+- Missing file (never saved): compiled defaults (identical to 1.5.0-preview.8-seven-roles.2). Once the audit log `scope-config-audit.jsonl` records a save, a missing configuration together with a missing key is refused (`INVALID_SCOPE_CONFIGURATION`, reason `configuration and key deleted after a save`) instead of reverting to the defaults (QQ review of #33).
+- `identity` reports `scopeConfigSource` and `github_accounts` reports `scopeConfig.source`: `default` (compiled defaults), `file` (signed configuration) or `invalid`.
 - Both files are checked on every call (size, mtime, inode) and re-read through the store's owner-only ACL check and re-verified when they change, so a save applies to the next call without restarting the plugin.
-- `deployment.json` (accounts allowed on this host, `automaticReviews`) is also read on every call, not once at worker start (DD, europa, 2026-11-16: the earlier `require()` snapshot ignored edits until the plugin restarted). An unreadable or invalid `deployment.json` makes every account unavailable on this host (`ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST`) and keeps automatic reviews off until it is fixed; no restart is needed. `test/hot-reload-runtime.test.cjs` runs one worker and changes both files underneath it.
+- `deployment.json` (accounts allowed on this host, `automaticReviews`) is also read on every call, not once at worker start (DD, europa, 2026-11-16: the earlier `require()` snapshot ignored edits until the plugin restarted). An unreadable or invalid `deployment.json` makes every account unavailable on this host (`ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST`) until it is fixed; no restart is needed. `automaticReviews` is an owner safety switch and is the exception: it is read once when the worker starts, so editing `deployment.json` cannot turn automatic reviews on in a running plugin (QQ review of #33); a change takes effect after the plugin restarts. `test/hot-reload-runtime.test.cjs` runs one worker and changes both files underneath it.
 - An unreadable, oversized (> 64 KB), unsigned or invalid file never falls back to defaults: every call returns `INVALID_SCOPE_CONFIGURATION`, `not_executed`, before credentials are read; `github_accounts` reports `scopeConfig.error`; the settings page shows the reason.
 
 ## Integrity (QQ review 2026-11-16)
@@ -47,11 +48,12 @@ Every call (and the settings page) rejects with `INVALID_SCOPE_CONFIGURATION`:
 - an unsigned or legacy plain-JSON file;
 - a replay of an older, correctly signed file (its revision is below the sealed revision);
 - a deleted configuration after a save (the sealed revision is above 0);
+- both the configuration and its key deleted after a save (the audit log records the save);
 - a configuration without its sealed key, or a key that cannot be unsealed.
 
 A save writes the signed configuration first and then seals the new revision; if the plugin stops in between, the configuration is one revision ahead of the sealed state and is accepted (the first-ever save fails closed until it is repeated).
 
-Residual risk: any process running as the same Windows user can also call DPAPI, so it could unseal the key and sign its own configuration, or delete both files to fall back to the compiled defaults. This is outside the trust boundary below; it is no longer possible by editing a JSON file.
+Residual risk: any process running as the same Windows user can also call DPAPI, so it could unseal the key and sign its own configuration, or delete the configuration, its key and the audit log together to fall back to the compiled defaults (deleting only the configuration and key is refused). The audit log is trimmed from the oldest line at about 900 KB, so a save could only drop out of it after hundreds of kilobytes of later audit lines. This is outside the trust boundary below; it is no longer possible by editing a JSON file.
 
 ## Format
 
