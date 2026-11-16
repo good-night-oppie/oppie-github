@@ -281,7 +281,7 @@ var require_repository_policy = __commonJS({
     var SIX = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339, "montclip-rsi": 1450602468, "rsi-playbooks": 1450603260, "oppie-github": 1451885379, "sglang-review-inbox": 1451900929 });
     var CATALOG = Object.freeze({ ...SIX, cindy: 1457433299 });
     var OPTIONAL_REPOSITORIES = Object.freeze(["cindy"]);
-    var ACCOUNT_NAMES = Object.freeze(["ad", "bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
+    var ACCOUNT_NAMES = Object.freeze(["bb", "cindy", "deja", "dd", "gg", "jj", "pg", "qq", "rea", "video", "vv", "reviewinbox"]);
     var TWO = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var CINDY_ROLES = Object.freeze({ bb: "write", deja: "write", dd: "write", qq: "write" });
     var CINDY_EXECUTION = Object.freeze(Object.keys(CINDY_ROLES));
@@ -351,14 +351,14 @@ var require_core = __commonJS({
     var { validateEdits, applyEdits, MAX_FILE_BYTES } = require_file_edit();
     var commitFilesModule = require_commit_files();
     var MAX_OPERATION_BYTES = 261120;
+    var MAX_INSTALLATION_PAGES = 10;
     var OWNER = "good-night-oppie";
     var { initialPolicy, validatePolicy, repositoryRestriction, OPTIONAL_REPOSITORIES } = require_repository_policy();
     var REPOSITORIES = Object.freeze({ MontClip: 1441621868, "MontClip-Cindy": 1446532339 });
     var QQ_ONLY = ["list_rulesets", "get_ruleset", "ruleset_update", "dismiss_review", "enqueue_pull"];
     var QQ_ALLOWED = ["identity", "get_contents", "list_branches", "list_issues", "get_issue", "list_pulls", "get_pull", "pull_files", "list_reviews", "submit_review", ...QQ_ONLY];
-    var APP_NAMES = Object.freeze({ ad: "ADOppieXYZ", bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
+    var APP_NAMES = Object.freeze({ bb: "BBOppieXYZ", cindy: "CindyOppieXYZ", deja: "DejaOppieXYZ", dd: "DDOppieXYZ", gg: "GGOppieXYZ", jj: "JJOppieXYZ", pg: "PGOppieXYZ", qq: "QQOppieXYZ", rea: "ReaOppieXYZ", video: "VideoOppieXYZ", vv: "VVOppieXYZ", reviewinbox: "ReviewInboxOppieXYZ" });
     var ACCOUNTS = Object.freeze(Object.fromEntries([
-      ["ad", 5764947, 182084517],
       ["bb", 5665927, 179806310],
       ["cindy", 5665939, 179806330],
       ["deja", 5665940, 179806356],
@@ -512,8 +512,10 @@ var require_core = __commonJS({
             if (!Array.isArray(r?.repositories) || r.total_count !== r.repositories.length) return null;
             const ids = /* @__PURE__ */ new Set(), names = [];
             for (const x of r.repositories) {
-              if (!obj(x) || typeof x.name !== "string" || x.full_name !== OWNER + "/" + x.name || !Object.hasOwn(expected, x.name) || expected[x.name] !== x.id || ids.has(x.id)) return null;
+              if (!obj(x) || typeof x.name !== "string" || x.full_name !== OWNER + "/" + x.name || !Number.isSafeInteger(x.id) || ids.has(x.id)) return null;
               ids.add(x.id);
+              if (!Object.hasOwn(expected, x.name)) continue;
+              if (expected[x.name] !== x.id) return null;
               names.push(x.name);
             }
             if (Object.keys(expected).some((n) => !OPTIONAL_REPOSITORIES.includes(n) && !names.includes(n))) return null;
@@ -774,12 +776,24 @@ var require_core = __commonJS({
           const app = await api("/app", jwt);
           if (Number(app?.id) !== account.app_id || !allowedAppSlug(account.account, app?.slug) || app?.owner?.login !== OWNER) bad("APP_IDENTITY_MISMATCH");
           const installation = await api("/app/installations/" + account.installation_id, jwt);
-          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || installation?.repository_selection !== "selected" || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
+          if (Number(installation?.id) !== account.installation_id || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
           checkPermissions(installation.permissions, account, "installation");
           const probeResponse = await api("/app/installations/" + account.installation_id + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
           if (typeof probeResponse?.token !== "string" || !probeResponse.token) bad("INVALID_INSTALLATION_TOKEN");
           secrets.push(probeResponse.token);
-          const probe = await api("/installation/repositories?per_page=100", probeResponse.token);
+          async function listInstallation(token2) {
+            const repositories = [];
+            let total = null;
+            for (let page = 1; page <= MAX_INSTALLATION_PAGES; page++) {
+              const r = await api("/installation/repositories?per_page=100" + (page > 1 ? "&page=" + page : ""), token2);
+              if (!obj(r) || !Number.isSafeInteger(r.total_count) || !Array.isArray(r.repositories) || total !== null && r.total_count !== total) return { total_count: -1, repositories };
+              total = r.total_count;
+              repositories.push(...r.repositories);
+              if (repositories.length >= total || !r.repositories.length) break;
+            }
+            return { total_count: total, repositories };
+          }
+          const probe = await listInstallation(probeResponse.token);
           const optionalPresent = installedOptional(probe, scope.installation);
           if (optionalPresent === null) scopeMismatch("INSTALLATION_REPOSITORY_SCOPE_MISMATCH", probe, scope.installation);
           const effectiveRepos = Object.freeze(Object.fromEntries(Object.entries(expectedRepos).filter(([n]) => !OPTIONAL_REPOSITORIES.includes(n) || optionalPresent.includes(n))));
@@ -862,7 +876,7 @@ var require_core = __commonJS({
             if (!errors.length) throw new CoreError("QUEUE_REJECTED", "not_executed", void 0, { githubErrors: errors, readback: state, reason: "no mergeQueueEntry in response" });
             throw new CoreError(classifyQueueErrors(errors), "not_executed", void 0, { githubErrors: errors, readback: state });
           }
-          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
+          const result = operation === "identity" ? { app_id: account.app_id, app_slug: app.slug, owner: OWNER, permissions: permissions(account), repositories: repos.repositories.map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositories: probe.repositories.filter((r) => Object.hasOwn(scope.installation, r.name)).map((r) => ({ id: r.id, full_name: r.full_name })), installationRepositorySelection: installation.repository_selection, installationRepositoryCount: probe.repositories.length, scopeRevision: policy.revision, expires_at: tokenResponse.expires_at } : operation === "enqueue_pull" ? await enqueue() : operation === "commit_files" ? await commitFilesModule.commitFiles({ plan: preflight.plan, api, root, token, repoUrl: "https://github.com/" + OWNER + "/" + repo, bad, CoreError }) : await api(route, token, method, body);
           return { ok: true, receipt: { scopeRevision: policy.revision, account: account.account, app_slug: app.slug, installation_id: account.installation_id, repo: OWNER + "/" + repo, operation, execution: "completed", url: typeof result?.html_url === "string" ? result.html_url : app.html_url }, result: clean(result, secrets) };
         } catch (e) {
           return { ok: false, errorCode: e instanceof CoreError ? e.code : "INTERNAL_ERROR", execution: e instanceof CoreError ? e.execution : "not_executed", ...e instanceof CoreError && e.status ? { status: e.status } : {}, ...e instanceof CoreError && e.details ? { details: clean(e.details, secrets) } : {}, ...scopeDiagnostics ? { diagnostics: clean(scopeDiagnostics, secrets) } : {} };
@@ -1060,8 +1074,8 @@ var require_store = __commonJS({
     var { promisify } = require("node:util");
     var runFile = promisify(execFile);
     var { ACCOUNTS, allowedAppSlug } = require_core();
-    var APP_IDS = { ad: "5764947", bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", reviewinbox: "5687106" };
-    var INSTALL_IDS = {ad: "182084517", bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", reviewinbox: "180305629" };
+    var APP_IDS = { bb: "5665927", cindy: "5665939", deja: "5665940", dd: "5665941", gg: "5665942", jj: "5665943", pg: "5665944", qq: "5665946", rea: "5665948", video: "5665949", vv: "5665951", reviewinbox: "5687106" };
+    var INSTALL_IDS = { bb: "179806310", cindy: "179806330", deja: "179806356", dd: "179806387", gg: "179806414", jj: "179806445", pg: "179806482", qq: "179806512", rea: "179806534", video: "179806582", vv: "179806217", reviewinbox: "180305629" };
     var MAX_PEM = 32768;
     var MAX_STORE = 1048576;
     function failure(code) {
@@ -1349,7 +1363,6 @@ var require_deployment = __commonJS({
   "deployment.json"(exports2, module2) {
     module2.exports = {
       accounts: [
-        "ad",
         "bb",
         "cindy",
         "deja",
