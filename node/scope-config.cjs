@@ -21,7 +21,11 @@ const DEFAULTS=Object.freeze({
  newAccounts:Object.freeze({}),
 });
 const BUILTIN_ACCOUNTS=Object.freeze(['bb','cindy','deja','dd','gg','jj','pg','qq','rea','video','vv','reviewinbox']);
-const ROLES=Object.freeze(['write','review','comment_review']);
+// Account roles. 'reviewer' (BB/QQ, #28/#29): read, comment_issue and submit_review with any event.
+const ROLES=Object.freeze(['write','reviewer','review','comment_review']);
+// Per-repository roles also accept 'none': the repository is not usable by that account (owner decides
+// in the settings page, e.g. whether AD may use cindy); it is left out of the account's execution token.
+const REPOSITORY_ROLES=Object.freeze([...ROLES,'none']);
 const KEYS=Object.freeze(['schemaVersion','revision','repositories','optionalRepositories','accounts','twoRepositories','repositoryRoles','reviewOperations','newAccounts']);
 const REPO_NAME=/^[A-Za-z0-9._-]{1,100}$/;
 const ACCOUNT_NAME=/^[a-z][a-z0-9-]{0,31}$/;
@@ -75,7 +79,7 @@ function validateConfig(raw){
   const seenApps=new Set(),seenInstalls=new Set();
   for(const [name,a] of Object.entries(raw.newAccounts)){
    if(!ACCOUNT_NAME.test(name)||BUILTIN_ACCOUNTS.includes(name))invalid('newAccounts name '+name);
-   if(!plain(a)||Object.keys(a).some(k=>!['appId','installationId','appName','appSlug','role','operations'].includes(k)))invalid('newAccounts '+name);
+   if(!plain(a)||Object.keys(a).some(k=>!['appId','installationId','appName','appSlug','role','operations','allowBroaderInstallation'].includes(k)))invalid('newAccounts '+name);
    id(a.appId,'appId');id(a.installationId,'installationId');
    if(BUILTIN_APP_IDS.includes(a.appId)||BUILTIN_INSTALLATION_IDS.includes(a.installationId))invalid('newAccounts '+name+' reuses a compiled App or installation');
    if(typeof a.appName!=='string'||!APP_NAME.test(a.appName))invalid('appName');
@@ -84,9 +88,12 @@ function validateConfig(raw){
    if(a.operations!==undefined){operations=names(a.operations,'operations',/^[a-z_]{1,40}$/,40);if(!operations.includes('identity')||operations.some(o=>!ACCOUNT_OPERATION_CEILING.includes(o)))invalid('operations must include identity and stay within the configured-account ceiling');}
    // Default role for a new account is review-only; 'write' must be stated explicitly.
    const role=a.role===undefined?'review':a.role;if(!ROLES.includes(role))invalid('role');
+   // Some Apps are installed with more permissions than the role needs (AD: secrets, workflows, actions,
+   // hooks). The owner may accept that per account; execution tokens are still checked exactly.
+   if(a.allowBroaderInstallation!==undefined&&typeof a.allowBroaderInstallation!=='boolean')invalid('allowBroaderInstallation');
    if(seenApps.has(a.appId)||seenInstalls.has(a.installationId))invalid('newAccounts duplicate id');
    seenApps.add(a.appId);seenInstalls.add(a.installationId);
-   newAccounts[name]=Object.freeze({appId:a.appId,installationId:a.installationId,appName:a.appName,appSlug,role,...(operations?{operations}:{})});
+   newAccounts[name]=Object.freeze({appId:a.appId,installationId:a.installationId,appName:a.appName,appSlug,role,...(operations?{operations}:{}),...(a.allowBroaderInstallation===true?{allowBroaderInstallation:true}:{})});
   }
  }
  const known=[...BUILTIN_ACCOUNTS,...Object.keys(newAccounts)];
@@ -97,13 +104,15 @@ function validateConfig(raw){
  if(!plain(rolesSource))invalid('repositoryRoles');
  for(const [repo,table] of Object.entries(rolesSource)){
   if(!Object.hasOwn(repositories,repo)||!plain(table))invalid('repositoryRoles '+repo);
-  const t={};for(const [acct,role] of Object.entries(table)){if(!known.includes(acct)||!ROLES.includes(role))invalid('repositoryRoles '+repo+'.'+acct);t[acct]=role;}
+  const t={};for(const [acct,role] of Object.entries(table)){if(!known.includes(acct)||!REPOSITORY_ROLES.includes(role))invalid('repositoryRoles '+repo+'.'+acct);t[acct]=role;}
   repositoryRoles[repo]=Object.freeze(t);
  }
+ // Every enabled account must keep at least one usable repository.
+ for(const acct of accounts)if(Object.keys(repositories).every(r=>repositoryRoles[r]?.[acct]==='none'))invalid('account '+acct+' has no usable repository');
  const reviewOperations=raw.reviewOperations===undefined?DEFAULTS.reviewOperations:names(raw.reviewOperations,'reviewOperations',/^[a-z_]{1,40}$/,40);
  if(!reviewOperations.includes('identity')||reviewOperations.some(o=>!REVIEW_OPERATION_CEILING.includes(o)))invalid('reviewOperations must be a subset of the compiled review operations and include identity');
  return Object.freeze({schemaVersion:1,revision,repositories,optionalRepositories,accounts,twoRepositories,repositoryRoles:Object.freeze(repositoryRoles),reviewOperations,newAccounts:Object.freeze(newAccounts)});
 }
 const DEFAULT_CONFIG=validateConfig({});
 
-module.exports={OWNER,DEFAULTS,DEFAULT_CONFIG,BUILTIN_ACCOUNTS,BUILTIN_APP_IDS,BUILTIN_INSTALLATION_IDS,ACCOUNT_OPERATION_CEILING,REVIEW_OPERATION_CEILING,MAX_FILE_BYTES,validateConfig};
+module.exports={OWNER,DEFAULTS,DEFAULT_CONFIG,BUILTIN_ACCOUNTS,BUILTIN_APP_IDS,BUILTIN_INSTALLATION_IDS,ACCOUNT_OPERATION_CEILING,REVIEW_OPERATION_CEILING,MAX_FILE_BYTES,ROLES,REPOSITORY_ROLES,validateConfig};
