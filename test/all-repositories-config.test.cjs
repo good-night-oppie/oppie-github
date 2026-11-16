@@ -68,7 +68,7 @@ test('a stranger repository never reaches an execution token; a token that conta
   const a=ACCOUNTS.bb;let data;
   if(u.pathname==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(u.pathname==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'all',permissions:PERMS('bb')};
-  else if(u.pathname.endsWith('/access_tokens')){const b=JSON.parse(init.body);data={token:b.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:b.repository_ids?PERMS('bb'):{metadata:'read'}};}
+  else if(u.pathname.endsWith('/access_tokens')){const b=JSON.parse(init.body);data={token:b.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:b.repository_ids?b.permissions:{metadata:'read'}};}
   else if(u.pathname==='/installation/repositories')data={total_count:listing.length,repositories:listing};
   return {ok:true,status:200,text:async()=>JSON.stringify(data)};
  }});
@@ -163,30 +163,33 @@ test('repositoryRoles and reviewOperations from configuration are enforced',asyn
 const AD={appId:5764947,installationId:182084517,appName:'ADOppieXYZ'};
 const adCfg=(extra={},rest={})=>validateConfig({newAccounts:{ad:{...AD,...extra}},...rest});
 const tokenRequest=f=>f.calls.filter(c=>c.route.endsWith('/access_tokens')&&c.body.repository_ids).at(-1).body;
-test('AD item 1: a broader installation is accepted only when the owner allows it; the execution token stays exact',async()=>{
- const strict=adCfg({role:'reviewer'});
- assert.equal((await run(fixture('ad',{scopeConfig:()=>strict,installPerms:AD_BROAD_INSTALL}),'ad','identity')).errorCode,'PERMISSION_MISMATCH');
- const broad=adCfg({role:'reviewer',allowBroaderInstallation:true});
+// Owner 2026-11-16 (via QQ): no per-account switch; permissions follow the actual installation.
+test('AD item 1: a broader installation is accepted automatically; the execution token stays exact',async()=>{
+ const broad=adCfg({role:'reviewer'});
  const f=fixture('ad',{scopeConfig:()=>broad,installPerms:AD_BROAD_INSTALL}),r=await run(f,'ad','identity');
- assert.equal(r.ok,true,r.errorCode);
+ assert.equal(r.ok,true,r.errorCode);assert.deepEqual(r.result.missingInstallationPermissions,[]);
  assert.deepEqual(tokenRequest(f).permissions,{contents:'read',issues:'write',pull_requests:'write',metadata:'read'});
  // The minted token must equal the request: any extra or stronger permission is refused.
  for(const extra of [{contents:'write'},{secrets:'write'},{workflows:'write'},{administration:'read'},{issues:'read'}]){
   const g=fixture('ad',{scopeConfig:()=>broad,installPerms:AD_BROAD_INSTALL,tokenPerms:{contents:'read',issues:'write',pull_requests:'write',metadata:'read',...extra}});
   assert.equal((await run(g,'ad','get_pull',{number:320})).errorCode,'PERMISSION_MISMATCH',JSON.stringify(extra));
  }
- // A broader installation must still contain every level the role needs.
- const missing=fixture('ad',{scopeConfig:()=>broad,installPerms:{...AD_BROAD_INSTALL,issues:'read'}});
- assert.equal((await run(missing,'ad','identity')).errorCode,'PERMISSION_MISMATCH');
- assert.throws(()=>adCfg({allowBroaderInstallation:'yes'}),{code:'INVALID_SCOPE_CONFIGURATION'});
+ // An installation lacking a needed level fails with what is missing and where to add it.
+ const missing=fixture('ad',{scopeConfig:()=>broad,installPerms:{...AD_BROAD_INSTALL,issues:'read'}}),m=await run(missing,'ad','identity');
+ assert.equal(m.errorCode,'INSTALLATION_PERMISSION_MISSING');assert.deepEqual(m.details.missing,[{permission:'issues',required:'write',installed:'read'}]);
+ assert.equal(m.details.app,'ADOppieXYZ');assert.match(m.details.installationUrl,/settings\/installations\/182084517$/);
+ // The removed switch is not accepted in the configuration.
+ assert.throws(()=>adCfg({allowBroaderInstallation:true}),{code:'INVALID_SCOPE_CONFIGURATION'});
 });
 test('AD item 2: a configured account that cannot write contents requests contents:read',async()=>{
  for(const role of ['review','reviewer','comment_review']){
   const f=fixture('ad',{scopeConfig:()=>adCfg({role})});assert.equal((await run(f,'ad','get_pull',{number:320})).ok,true,role);
   assert.equal(tokenRequest(f).permissions.contents,'read',role);
  }
+ // A write role asks for contents:write only on a content write; its reads stay contents:read.
  const w=fixture('ad',{scopeConfig:()=>adCfg({role:'write'}),installPerms:PERMS('bb')});await run(w,'ad','get_pull',{number:320});
- assert.equal(tokenRequest(w).permissions.contents,'write');
+ assert.equal(tokenRequest(w).permissions.contents,'read');
+ assert.equal((await run(w,'ad','create_branch',{branch:'ad/x',sha:SHA})).ok,true);assert.equal(tokenRequest(w).permissions.contents,'write');
  // Write role limited to operations that never touch contents: still contents:read.
  const ops=fixture('ad',{scopeConfig:()=>adCfg({role:'write',operations:['identity','get_pull','comment_issue','create_pull']})});
  assert.equal((await run(ops,'ad','get_pull',{number:320})).ok,true);assert.equal(tokenRequest(ops).permissions.contents,'read');
