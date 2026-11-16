@@ -33,6 +33,14 @@ cindy.onHostMessage(async function(message) {
       if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
       method='run_confirmed';params={input:params,confirmation:message.callId};
     }
+    // Repository merge settings (ADR 0003 section 4): a host confirmation each time, whichever account runs them.
+    else if(message.tool==='github'&&params.operation==='admin_update'){
+      const body='本次授权 '+params.account+' 修改 '+params.repo+' 的合并设置：'+JSON.stringify(params.args||{});
+      if(body.length>300)throw Error('CONFIRMATION_TOO_LARGE');
+      const approval=await cindy.confirm({body,confirmText:'仅批准本次',cancelText:'取消',danger:true});
+      if(!approval.ok||!approval.confirmed)throw Error('OWNER_CONFIRMATION_REQUIRED');
+      method='run_confirmed';params={input:params,confirmation:message.callId};
+    }
     if(new TextEncoder().encode(JSON.stringify(params)).length>MAX_OPERATION_BYTES){await cindy.send({type:'tool-result',callId:message.callId,ok:true,result:safeFailure('REQUEST_TOO_LARGE','not_executed')});return;}
     sent=true;
     const response = await cindy.node.request({method,params,callId:message.callId,cancelWithCall:true,timeoutMs:120000});
