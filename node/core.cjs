@@ -40,6 +40,12 @@ function knownBotLogin(account,login){return typeof login==='string'&&Object.has
 const OPERATION_NAMES = Object.freeze(['identity','get_contents','list_branches','list_issues','get_issue','create_issue','update_issue','comment_issue','list_pulls','get_pull','pull_files','create_pull','update_pull','list_reviews','submit_review','create_branch','update_file','edit_file','commit_files','admin_get','admin_update',...QQ_ONLY]);
 class CoreError extends Error { constructor(code,execution='not_executed',status,details){super(code);this.code=code;this.execution=execution;if(status)this.status=status;if(details)this.details=details;} }
 function bad(code='INVALID_ARGUMENTS'){throw new CoreError(code);}
+// Plain-language error step (PG design review #8 step 1): failures carry which check failed; the
+// worker turns them into Chinese text (node/messages.cjs). Decisions are unchanged. Details hold only
+// public identifiers (App/installation IDs, slugs, logins), never keys, key paths or tokens.
+const printable=s=>[...s].map(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===127?' ':c).join('');
+function configFailure(e){const reason=typeof e?.reason==='string'?printable(e.reason).slice(0,200):undefined;throw new CoreError('INVALID_SCOPE_CONFIGURATION','not_executed',undefined,reason?{reason}:undefined);}
+function checksFailed(code,checks){const failed=checks.filter(c=>!c.ok).map(({ok,...c})=>c);if(failed.length)throw new CoreError(code,'not_executed',undefined,{failed});}
 function configDigest(c){return crypto.createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0,16);}
 function obj(x){return !!x&&typeof x==='object'&&!Array.isArray(x);}
 function exact(x,keys){if(!obj(x)||Object.keys(x).some(k=>!keys.includes(k)))bad();}
@@ -106,13 +112,13 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
   try{
    if(Buffer.byteLength(JSON.stringify(input??null),'utf8')>MAX_OPERATION_BYTES)bad('REQUEST_TOO_LARGE');
    exact(input,['account','repo','operation','args']);
-   let config;try{config=await scopeConfig();}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   let config;try{config=await scopeConfig();}catch(e){configFailure(e);}
    const account=configuredAccount(input.account,config);if(!account)bad('ACCOUNT_REQUIRED');const operation=input.operation;
    if(!OPERATION_NAMES.includes(operation))bad('UNKNOWN_OPERATION');
    if(account.account==='qq'&&!QQ_ALLOWED.includes(operation))bad('QQ_AUTHORING_REFUSED');
    // Configured accounts: optional per-account operation allowlist, never admin or QQ-only.
    if(account.configured&&(account.operations&&!account.operations.includes(operation)||!ACCOUNT_OPERATION_CEILING.includes(operation)))bad('OPERATION_NOT_ALLOWED_FOR_ACCOUNT');if(QQ_ONLY.includes(operation)&&account.account!=='qq')bad('QQ_ACCOUNT_REQUIRED');
-   let policy;try{policy=validatePolicy(repositoryPolicy(config),config);}catch(_){bad('INVALID_SCOPE_CONFIGURATION');}
+   let policy;try{policy=validatePolicy(repositoryPolicy(config),config);}catch(e){configFailure(e);}
    // The target must be in the configured list for this account, checked before any
    // credential is read. Since 2026-11-15 the App installations may contain more
    // repositories (owner granted "all repositories"); that never widens this list.
@@ -191,9 +197,19 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    const app=await api('/app',jwt);
    // Names may change during the controlled rollout. Identity never follows a
    // matching name alone: App ID, owner and installation remain pinned below.
-   if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
+   const shown=v=>typeof v==='string'||Number.isSafeInteger(v)?String(v).slice(0,100):v===undefined||v===null?'missing':'invalid';
+   checksFailed('APP_IDENTITY_MISMATCH',[
+    {check:'app_id',expected:String(account.app_id),actual:shown(app?.id),ok:Number(app?.id)===account.app_id},
+    {check:'app_slug',expected:account.allowed_slugs.join(' or '),actual:shown(app?.slug),ok:typeof app?.slug==='string'&&account.allowed_slugs.includes(app.slug)},
+    {check:'app_owner',expected:OWNER,actual:shown(app?.owner?.login),ok:app?.owner?.login===OWNER}]);
    const installation=await api('/app/installations/'+account.installation_id,jwt);
-   if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
+   checksFailed('INSTALLATION_MISMATCH',[
+    {check:'installation_id',expected:String(account.installation_id),actual:shown(installation?.id),ok:Number(installation?.id)===account.installation_id},
+    {check:'installation_app_id',expected:String(account.app_id),actual:shown(installation?.app_id),ok:Number(installation?.app_id)===account.app_id},
+    {check:'installation_owner',expected:OWNER,actual:shown(installation?.account?.login),ok:installation?.account?.login===OWNER},
+    {check:'installation_owner_type',expected:'Organization',actual:shown(installation?.account?.type),ok:installation?.account?.type==='Organization'},
+    {check:'repository_selection',expected:'selected or all',actual:shown(installation?.repository_selection),ok:['selected','all'].includes(installation?.repository_selection)},
+    {check:'suspended',expected:'not suspended',actual:installation?.suspended_at?'suspended':'not suspended',ok:!installation?.suspended_at}]);
    // An installation may hold more than the account needs (PG: administration; AD: secrets, workflows...);
    // ordinary execution never requests it.
    checkInstallation(installation.permissions,account,operation);
