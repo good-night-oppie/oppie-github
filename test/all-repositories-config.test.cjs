@@ -39,6 +39,7 @@ test('(a) deja identity on MontClip succeeds with an all-repositories installati
  const f=fixture('deja'),r=await run(f,'deja','identity');
  assert.equal(r.ok,true,r.errorCode);
  assert.equal(r.result.installationRepositorySelection,'all');
+ assert.equal(r.result.scopeConfigSource,'default');
  assert.equal(r.result.installationRepositoryCount,250);
  assert.deepEqual(r.result.installationRepositories.map(x=>x.id).sort(),Object.values(SEVEN).sort());
  assert.deepEqual(f.tokens().at(-1).body.repository_ids,Object.values(SEVEN),'token narrowed to the configured list');
@@ -129,6 +130,7 @@ test('a new account (AD) from configuration: pinned App identity, review-only by
  assert.equal((await run(fixture('ad'),'ad','identity')).errorCode,'ACCOUNT_REQUIRED');
  const f=fixture('ad',{scopeConfig:()=>cfg}),r=await run(f,'ad','identity');
  assert.equal(r.ok,true,r.errorCode);assert.equal(r.result.app_id,5764947);
+ assert.equal(r.result.scopeConfigSource,'file');
  assert.equal((await run(fixture('ad',{scopeConfig:()=>cfg}),'ad','submit_review',{number:320,commit_id:SHA,event:'COMMENT',body:'x'})).ok,true);
  const w=fixture('ad',{scopeConfig:()=>cfg}),denied=await run(w,'ad','create_branch',{branch:'ad/x',sha:SHA});
  assert.equal(denied.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(w.keyReads(),0);
