@@ -86,7 +86,7 @@ async function dispatch(method,args,host){
    verification=await verifyKey({account:args.account,pem,config:await scopeConfig()});
   }finally{bytes.fill(0);pem='';bytes=null;}
   if(!verification.ok)return verification;
-  const imported=await store.importKey({account:args.account,pem_path:args.pem_path,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:{appSlug:verification.result.app_slug}});
+  const imported=await store.importKey({account:args.account,pem_path:args.pem_path,replace:args.replace===true,expected_fingerprint:fingerprint,metadata:verification.result.warnings?.length?{}:{appSlug:verification.result.app_slug}});
   if(imported.fingerprint!==fingerprint)throw Error('KEY_CHANGED_DURING_IMPORT');
   return {ok:true,account:imported,verification:verification.result};
  }
