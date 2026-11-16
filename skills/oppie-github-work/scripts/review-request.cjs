@@ -476,13 +476,18 @@ var require_core = __commonJS({
     function permissions(operation) {
       return { metadata: "read", ...OPERATION_NEEDS[operation] };
     }
+    var WORKFLOW_DIR = ".github/workflows/";
+    function workflowPaths(preflight) {
+      const paths = ["file", "edit"].includes(preflight?.kind) ? [preflight.path] : preflight?.kind === "commit" ? preflight.plan.changes.flatMap((c) => c.from ? [c.from, c.path] : [c.path]) : [];
+      return paths.filter((p) => p.startsWith(WORKFLOW_DIR));
+    }
     var PERMISSION_RANK = Object.freeze({ none: 0, read: 1, write: 2 });
     function missingPermissions(actual, needed) {
       const level = (k) => obj(actual) && typeof actual[k] === "string" && Object.hasOwn(PERMISSION_RANK, actual[k]) ? actual[k] : "none";
       return Object.entries(needed).filter(([k, v]) => PERMISSION_RANK[level(k)] < PERMISSION_RANK[v]).map(([permission, required]) => ({ permission, required, installed: level(permission) }));
     }
-    function checkInstallation(actual, a, operation, installationId) {
-      const missing = missingPermissions(actual, permissions(operation));
+    function checkInstallation(actual, a, operation, installationId, needed = permissions(operation), workflowFiles = []) {
+      const missing = missingPermissions(actual, needed);
       if (!missing.length) return;
       const appPermissionsUrl = "https://github.com/organizations/" + OWNER + "/settings/apps/" + a.app_slug + "/permissions", installationUrl = "https://github.com/organizations/" + OWNER + "/settings/installations/" + installationId;
       throw new CoreError("INSTALLATION_PERMISSION_MISSING", "not_executed", void 0, {
@@ -490,13 +495,13 @@ var require_core = __commonJS({
         app: a.app_name,
         operation,
         missing,
+        ...workflowFiles.length ? { workflowFiles: workflowFiles.slice(0, 10) } : {},
         appPermissionsUrl,
         installationUrl,
         fix: "Add " + missing.map((m) => m.permission + ":" + m.required + " (installed: " + m.installed + ")").join(", ") + " in the App permissions (" + appPermissionsUrl + ") and accept the update on the installation page (" + installationUrl + ")."
       });
     }
-    function checkTokenPermissions(actual, operation) {
-      const requested = permissions(operation);
+    function checkTokenPermissions(actual, requested) {
       const granted = obj(actual) ? Object.fromEntries(Object.entries(actual).filter(([, v]) => v !== "none")) : null;
       if (!granted || Object.keys(granted).length !== Object.keys(requested).length || Object.entries(requested).some(([k, v]) => granted[k] !== v))
         throw new CoreError("TOKEN_PERMISSION_MISMATCH", "not_executed", void 0, { requested, granted: granted ? Object.fromEntries(Object.entries(granted).filter(([k, v]) => /^[a-z_]{1,40}$/.test(k) && typeof v === "string").slice(0, 60)) : null });
@@ -801,7 +806,8 @@ var require_core = __commonJS({
           }
           const installationId = account.installation_id || Number(installation?.id);
           if (!Number.isSafeInteger(installationId) || Number(installation?.id) !== installationId || Number(installation?.app_id) !== account.app_id || installation?.account?.login !== OWNER || installation?.account?.type !== "Organization" || !["selected", "all"].includes(installation?.repository_selection) || installation?.suspended_at) bad("INSTALLATION_MISMATCH");
-          checkInstallation(installation.permissions, account, operation, installationId);
+          const workflowFiles = workflowPaths(preflight), needed = workflowFiles.length ? { ...permissions(operation), workflows: "write" } : permissions(operation);
+          checkInstallation(installation.permissions, account, operation, installationId, needed, workflowFiles);
           async function listInstallation() {
             const probe = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { permissions: { metadata: "read" } });
             if (typeof probe?.token !== "string" || !probe.token) bad("INVALID_INSTALLATION_TOKEN");
@@ -836,7 +842,7 @@ var require_core = __commonJS({
           const tokenRepos = [.../* @__PURE__ */ new Set([repo, ...proofRepo ? [proofRepo] : []])];
           let tokenResponse;
           try {
-            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: permissions(operation) });
+            tokenResponse = await api("/app/installations/" + installationId + "/access_tokens", jwt, "POST", { repositories: tokenRepos, permissions: needed });
           } catch (e) {
             if (e instanceof CoreError && e.status === 422) throw new CoreError("REPOSITORY_NOT_INSTALLED", "not_executed", 422, { repositories: tokenRepos.map((n) => OWNER + "/" + n) });
             throw e;
@@ -844,7 +850,7 @@ var require_core = __commonJS({
           if (typeof tokenResponse?.token !== "string" || !tokenResponse.token || Date.parse(tokenResponse.expires_at) <= now() + 3e4 || !Number.isFinite(Date.parse(tokenResponse.expires_at))) bad("INVALID_INSTALLATION_TOKEN");
           const token = tokenResponse.token;
           secrets.push(token);
-          checkTokenPermissions(tokenResponse.permissions, operation);
+          checkTokenPermissions(tokenResponse.permissions, needed);
           const repos = await api("/installation/repositories?per_page=100", token);
           const exactRepos = (r) => r?.total_count === tokenRepos.length && Array.isArray(r.repositories) && r.repositories.length === tokenRepos.length && r.repositories.every((x) => obj(x) && tokenRepos.includes(x.name) && x.full_name === OWNER + "/" + x.name && Number.isSafeInteger(x.id)) && new Set(r.repositories.map((x) => x.name)).size === tokenRepos.length;
           if (!exactRepos(repos)) {
