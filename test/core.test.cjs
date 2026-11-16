@@ -2,7 +2,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
-const {createClient,makeJwt,ACCOUNTS,configuredAccount,OPERATION_NAMES,OPERATION_NEEDS}=require('../node/core.cjs');
+const {createClient,makeJwt,ACCOUNTS,configuredAccount,OPERATION_NAMES,OPERATION_NEEDS,knownBotLogin}=require('../node/core.cjs');
 const {validateConfig}=require('../node/scope-config.cjs');
 const {privateKey,publicKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const PEM=privateKey.export({type:'pkcs8',format:'pem'});
@@ -120,8 +120,18 @@ test('all approved App renames accept legacy/new names but return live GitHub sl
   }
  }
 });
-test('rename compatibility does not admit another alias, similar names or wrong numeric identity',async()=>{
- for(const options of [{slug:'ggoppiexyz'},{slug:'bboppiexyz-extra'},{slug:'bboppiexyz',wrongApp:true},{slug:'bboppiexyz',wrongOwner:true}]){
+// ADR 0003 Amendment 1 (PG; Deja agreed): the App ID is the identity anchor. A slug that differs from
+// the configured ones only adds a warning; a wrong App ID or owner still stops before any token.
+test('identity anchor is the App ID: a different slug only warns, a wrong App ID or owner still stops',async()=>{
+ for(const slug of ['ggoppiexyz','bboppiexyz-extra']){
+  const f=fixture({slug}),r=await f.client.run(input('identity'));
+  assert.equal(r.ok,true,JSON.stringify(r));
+  assert.deepEqual(r.receipt.warnings,[{check:'app_slug',expected:'oppie-agent-bb or bboppiexyz',actual:slug}]);assert.deepEqual(r.result.warnings,r.receipt.warnings);
+  // Bot comments are still recognised by the configured slugs only, never by the new live name.
+  assert.equal(knownBotLogin('bb',slug+'[bot]'),false);assert.equal(knownBotLogin('bb','bboppiexyz[bot]'),true);
+ }
+ const ok=fixture({slug:'bboppiexyz'}),r=await ok.client.run(input('identity'));assert.equal(r.ok,true);assert.equal(r.receipt.warnings,undefined);
+ for(const options of [{slug:'bboppiexyz',wrongApp:true},{slug:'bboppiexyz',wrongOwner:true}]){
   const f=fixture(options),r=await f.client.run(input('identity'));
   assert.equal(r.ok,false);assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
  }
@@ -153,9 +163,10 @@ test('administration follows the installation: missing it fails before any token
  assert.deepEqual(executionTokens(granted.calls)[0].permissions,{metadata:'read',administration:'read'});
 });
 
-test('ReviewInbox does not accept an invented legacy slug',async()=>{
+test('ReviewInbox under an unexpected slug works with a warning but its comments are not recognised by that slug',async()=>{
  const f=fixture({account:'reviewinbox',slug:'oppie-agent-reviewinbox'});const r=await f.client.run(input('identity',{},'reviewinbox'));
- assert.equal(r.ok,false);assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
+ assert.equal(r.ok,true);assert.equal(r.receipt.warnings[0].actual,'oppie-agent-reviewinbox');
+ assert.equal(knownBotLogin('reviewinbox','oppie-agent-reviewinbox[bot]'),false);
 });
 // Owner 2026-11-16 (via QQ): permissions follow the App's actual installation. A broader installation is
 // accepted and never forwarded; a narrower one fails only for operations that need what is missing,
