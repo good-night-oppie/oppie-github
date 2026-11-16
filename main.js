@@ -68,7 +68,9 @@ cindy.onHostMessage(async function(message) {
   const clearKeyCopy = () => (typeof fetch === 'function' ? fetch('/secrets/app_private_key', { method: 'DELETE' }).catch(() => {}) : Promise.resolve());
   void clearKeyCopy();
   const answer = (id, result) => channel.postMessage({ type: 'settings-result', id, result });
-  const fail = (code) => ({ ok: false, errorCode: code, execution: 'not_executed' });
+  const fail = (code, details) => ({ ok: false, errorCode: code, execution: 'not_executed', ...(details ? { details } : {}) });
+  // #38: keep the host's own reason when it does not open the card (for example a body over 300 characters).
+  const unavailable = (approval) => approval?.errorCode === 'BUSY' ? fail('BUSY') : fail('OWNER_CONFIRMATION_UNAVAILABLE', { hostErrorCode: typeof approval?.errorCode === 'string' && /^[A-Z_]{1,64}$/.test(approval.errorCode) ? approval.errorCode : 'UNKNOWN' });
   const node = async (method, params) => {
     const response = await cindy.node.request({ method, params, timeoutMs: 120000 });
     if (!response || !response.ok) return fail(typeof response?.errorCode === 'string' && /^[A-Z_]{1,64}$/.test(response.errorCode) ? response.errorCode : 'WORKER_UNAVAILABLE');
@@ -92,7 +94,7 @@ cindy.onHostMessage(async function(message) {
         // Never abbreviate what the owner approves: an oversized summary must be split into smaller saves.
         if (body.length > 300) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
         const approval = await cindy.confirm({ body, confirmText: '保存', cancelText: '取消', danger: true });
-        if (!approval.ok) { answer(m.id, fail(approval.errorCode === 'BUSY' ? 'BUSY' : 'OWNER_CONFIRMATION_UNAVAILABLE')); return; }
+        if (!approval.ok) { answer(m.id, unavailable(approval)); return; }
         if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
         answer(m.id, await node('settings/save', { ...params, hash: plan.hash }));
         return;
@@ -104,10 +106,12 @@ cindy.onHostMessage(async function(message) {
         try {
           const seen = await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'inspect' });
           if (!seen.ok) { answer(m.id, seen); return; }
-          const body = '为 ' + seen.summary + '。确认后用本机 DPAPI 加密保存私钥' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
-          if (body.length > 900) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
+          // The host shows at most 300 characters (#38); the card is the short summary, the full one
+          // comes back with the result after the owner confirms.
+          const body = '为 ' + (typeof seen.card === 'string' ? seen.card : seen.summary) + '。确认后用本机 DPAPI 加密保存私钥' + (m.replace === true ? '，并替换已保存的私钥' : '') + '。';
+          if (body.length > 300) { answer(m.id, fail('CONFIRMATION_TOO_LARGE')); return; }
           const approval = await cindy.confirm({ body, confirmText: '导入', cancelText: '取消', danger: true });
-          if (!approval.ok) { answer(m.id, fail('OWNER_CONFIRMATION_UNAVAILABLE')); return; }
+          if (!approval.ok) { answer(m.id, unavailable(approval)); return; }
           if (!approval.confirmed) { answer(m.id, fail('OWNER_CONFIRMATION_REQUIRED')); return; }
           answer(m.id, await node('settings/import_key', { account: m.account, replace: m.replace === true, phase: 'store', hash: seen.hash }));
         } finally { await clearKeyCopy(); }
