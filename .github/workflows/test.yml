@@ -1,6 +1,9 @@
 name: source-tests
 on:
+  # Only main: the merge queue's gh-readonly-queue/* branches are covered by merge_group below,
+  # and a second push run on the same commit could fail the queue on its own.
   push:
+    branches: [main]
   pull_request:
   # Merge queue: the required checks also run on the queue's merge_group commit.
   merge_group:
