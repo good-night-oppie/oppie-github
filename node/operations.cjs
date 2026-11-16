@@ -7,7 +7,7 @@ module.exports={
  get_issue:'{number:integer}',
  create_issue:'{title:string,body?:string,labels?:string[]}',
  update_issue:'{number:integer,title?:string,body?:string,labels?:string[],state?:open|closed}',
- comment_issue:'{number:integer,body:string}; explicit user-authorized comments only',
+ comment_issue:'{number:integer,body:string}; on a pull request the token also asks for pull_requests:write (checked first with a pull_requests:read token); explicit user-authorized comments only',
  list_pulls:'{state?:open|closed|all,page?:integer,per_page?:1..100}',
  get_pull:'{number:integer}',
  pull_files:'{number:integer,page?:integer,per_page?:1..100}',
