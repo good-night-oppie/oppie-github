@@ -17,7 +17,7 @@ function fixture(account,options={}){
   const path=new URL(url).pathname,body=init.body?JSON.parse(init.body):null;calls.push({path,body,method:init.method});let data;
   if(path==='/app')data={id:a.app_id,slug:a.app_slug,owner:{login:'good-night-oppie'}};
   else if(path==='/app/installations/'+a.installation_id)data={id:a.installation_id,app_id:a.app_id,account:{login:'good-night-oppie',type:'Organization'},repository_selection:'selected',permissions:options.installPermissions||installPermissions};
-  else if(path.endsWith('/access_tokens'))data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:options.tokenPermissions||permissions};
+  else if(path.endsWith('/access_tokens'))data={token:body.repository_ids?'exec':'probe',expires_at:new Date(now+600000).toISOString(),permissions:options.tokenPermissions||body.permissions||permissions};
   else if(path==='/installation/repositories')data=rows(init.headers.Authorization==='Bearer probe'?installation:execution);
   else if(path.startsWith('/repos/')&&path.endsWith('/issues'))data={number:42,html_url:'https://github.com/good-night-oppie/'+path.split('/')[3]+'/issues/42'};
   else throw Error('Unexpected request');
@@ -31,7 +31,7 @@ for(const account of SIX)test(account+' uses its execution repositories for ordi
   if(repositoryRestriction(account,repo)){assert.equal(result.errorCode,'REVIEW_ONLY_REPOSITORY');assert.equal(f.keyReads(),0);continue;}
   assert.equal(result.ok,true,repo+': '+result.errorCode);
   const request=f.calls.filter(c=>c.path.endsWith('/access_tokens')).at(-1).body;
-  assert.deepEqual(request.repository_ids,Object.values(execution));assert.deepEqual(request.permissions,f.permissions);
+  assert.deepEqual(request.repository_ids,Object.values(execution));assert.deepEqual(request.permissions,{...f.permissions,contents:'read'});
   assert.equal(f.calls.filter(c=>c.path.startsWith('/repos/')).length,1);
  }
 });
@@ -58,8 +58,9 @@ test('PG admin and QQ-only operations fail before credentials',async()=>{
 });
 test('PG installation still refuses insufficient ordinary permissions',async()=>{
  const basic={contents:'write',issues:'write',pull_requests:'write',metadata:'read'};
- for(const installPermissions of [{...basic,contents:'read'},{...basic,issues:'none'},{...basic,pull_requests:'read'},{...basic,metadata:'none'}]){
-  const f=fixture('pg',{installPermissions});assert.equal((await f.client.run({account:'pg',repo:'MontClip',operation:'identity'})).errorCode,'PERMISSION_MISMATCH');
+ // identity needs contents:read only (owner 2026-11-16), so contents is tested with read below none.
+ for(const installPermissions of [{...basic,contents:'none'},{...basic,issues:'none'},{...basic,pull_requests:'read'},{...basic,metadata:'none'}]){
+  const f=fixture('pg',{installPermissions});assert.equal((await f.client.run({account:'pg',repo:'MontClip',operation:'identity'})).errorCode,'INSTALLATION_PERMISSION_MISSING');
   assert.equal(f.calls.some(c=>c.path.endsWith('/access_tokens')),false);
  }
 });
