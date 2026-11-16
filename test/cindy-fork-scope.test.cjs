@@ -58,9 +58,13 @@ const AUTHORING=[
 const READS=[['identity',{}],['get_contents',{path:'README.md'}],['list_branches',{}],['list_issues',{}],['get_issue',{number:1}],['list_pulls',{}],['get_pull',{number:7}],['pull_files',{number:7}],['list_reviews',{number:7}]];
 
 // 1. Enum and review queue.
-test('the github tool repo enum offers cindy; the review queue does not',()=>{
+test('the github tool repo accepts every configured name (no enum); the review queue keeps its fixed list',()=>{
  const ghost=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ghost.json'),'utf8'));
- assert.deepEqual(ghost.tools.find(t=>t.name==='github').parameters.properties.repo.enum,Object.keys(SEVEN));
+ // 2026-11-15: the list lives in scope-config.json and is enforced in Node before credentials.
+ const repoSchema=ghost.tools.find(t=>t.name==='github').parameters.properties.repo;
+ assert.equal(repoSchema.enum,undefined);const re=new RegExp(repoSchema.pattern);
+ for(const n of Object.keys(SEVEN))assert.ok(re.test(n),n);
+ for(const n of ['good-night-oppie/MontClip','../x','a b',''])assert.ok(!re.test(n),n);
  assert.deepEqual(ghost.tools.find(t=>t.name==='github_review_queue').parameters.properties.repo.enum,['good-night-oppie/MontClip','good-night-oppie/MontClip-Cindy']);
  for(const t of ghost.tools.filter(t=>t.name!=='github'))assert.ok(!JSON.stringify(t.parameters?.properties?.repo??null).includes('cindy"'),t.name);
  assert.deepEqual(QUEUE_REPOS,['good-night-oppie/MontClip','good-night-oppie/MontClip-Cindy']);
@@ -247,4 +251,5 @@ for(const [account,execution] of Object.entries(DESIGN))test(account+' across si
  assert.equal(r.ok,true,r.errorCode);assert.ok(!tokens(f).at(-1).body.repository_ids.includes(STRANGER.id));
 });
 
+// Owner decision 2026-11-15: the ReviewInbox COMMENT-only limit stays removed.
 test('ReviewInbox supports all review decisions across seven repositories',async()=>{for(const repo of Object.keys(SEVEN))for(const event of ['COMMENT','APPROVE','REQUEST_CHANGES']){const f=fixture('reviewinbox'),r=await run(f,'reviewinbox','submit_review',{number:7,commit_id:SHA,event,body:'synthetic'},repo);assert.equal(r.ok,true,repo+' '+event+': '+r.errorCode);assert.equal(writes(f).length,1);}});
