@@ -33,7 +33,7 @@ function configuredAccount(name,config=DEFAULT_CONFIG){
  // QQ (#28): an account that can never write repository contents gets contents:read tokens.
  const mayWrite=a.role==='write'||Object.values(config.repositoryRoles).some(t=>t[name]==='write');
  const contentsWrite=mayWrite&&(!a.operations||a.operations.some(o=>CONTENT_WRITE_OPERATIONS.includes(o)));
- return Object.freeze({account:name,app_id:a.appId,installation_id:a.installationId,app_name:a.appName,app_slug:slug,app_slug_status:'expected_not_live',allowed_slugs:Object.freeze([...new Set([slug,'oppie-agent-'+name])]),admin:false,configured:true,role:a.role,operations:a.operations||null,contents_write:contentsWrite,allow_broader_installation:a.allowBroaderInstallation===true});
+ return Object.freeze({account:name,app_id:a.appId,installation_id:a.installationId,app_name:a.appName,app_slug:slug,app_slug_status:'expected_not_live',allowed_slugs:Object.freeze([...new Set([slug,'oppie-agent-'+name])]),admin:false,configured:true,role:a.role,operations:a.operations||null,contents_write:contentsWrite});
 }
 function allowedAppSlug(account,slug){return typeof slug==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.includes(slug);}
 function knownBotLogin(account,login){return typeof login==='string'&&Object.hasOwn(ACCOUNTS,account)&&ACCOUNTS[account].allowed_slugs.some(slug=>login===slug+'[bot]');}
@@ -50,19 +50,32 @@ function sha(x){if(typeof x!=='string'||! /^[a-f0-9]{40}$/i.test(x))bad();return
 function ref(x){nonempty(x,200);if(/[\s~^:?*\[\\%\x00-\x1f]/.test(x)||x.includes('..')||x.includes('@{')||x.includes('//')||x.startsWith('/')||x.endsWith('/')||x.endsWith('.')||x.split('/').some(s=>s.startsWith('.')||s.endsWith('.lock')))bad('INVALID_REF');return x;}
 function filePath(x,empty=false){str(x,1000);if(!x&&empty)return '';if(!x||x.startsWith('/')||/[\\%?#\x00-\x1f]/.test(x)||x.split('/').some(s=>!s||s==='.'||s==='..'))bad('INVALID_PATH');return x.split('/').map(encodeURIComponent).join('/');}
 function repoName(x,allowed=REPOSITORIES){if(typeof x!=='string')bad('REPOSITORY_REQUIRED');const n=x.startsWith(OWNER+'/')?x.slice(OWNER.length+1):x;if(!Object.hasOwn(allowed,n))bad('REPOSITORY_NOT_ALLOWED');return n;}
-// #16: QQ's execution token stays contents:read; only enqueue_pull (a merge-queue
-// write) requests contents:write, which the QQ installation already holds.
-function permissions(a,operation){return {contents:a.configured?(a.contents_write?'write':'read'):a.account==='qq'&&operation==='enqueue_pull'?'write':a.account==='qq'?'read':'write',issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
-function checkPermissions(actual,a,phase='execution',operation){
- const expected=permissions(a,operation),rank={none:0,read:1,write:2};
- // PG may have additional owner-granted installation permissions. Never request
- // or accept them on its ordinary execution token; QQ's existing rules stay unchanged.
- // A configured account may accept the same for its installation when the owner allows it
- // (allowBroaderInstallation, e.g. AD); its execution token is still compared exactly.
- const pgInstallation=phase==='installation'&&(a.account==='pg'||a.configured===true&&a.allow_broader_installation===true);
- const allowSuperset=a.account==='qq'||pgInstallation;
- if(pgInstallation&&(!obj(actual)||Object.keys(expected).some(k=>typeof actual[k]!=='string'||!Object.hasOwn(rank,actual[k]))))bad('PERMISSION_MISMATCH');
- if(!obj(actual)||Object.entries(expected).some(([k,v])=>allowSuperset?(rank[actual[k]]??-1)<rank[v]:actual[k]!==v)||(!allowSuperset&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');
+// Owner 2026-11-16 (via QQ): permissions follow the App's actual GitHub installation instead of a
+// fixed list in the plugin. The execution token requests the least this operation needs: contents:write
+// only for content writes (and QQ's enqueue_pull, #16), contents:read otherwise. Without an operation
+// the result is the most the account's role can need (shown by identity).
+function contentsNeed(a,operation){
+ if(operation===undefined)return a.account==='qq'?'read':a.configured?(a.contents_write?'write':'read'):'write';
+ return CONTENT_WRITE_OPERATIONS.includes(operation)||a.account==='qq'&&operation==='enqueue_pull'?'write':'read';
+}
+function permissions(a,operation){return {contents:contentsNeed(a,operation),issues:'write',pull_requests:'write',metadata:'read',...(a.admin?{administration:'write'}:{})};}
+const PERMISSION_RANK=Object.freeze({none:0,read:1,write:2});
+// Levels the installation lacks for these needs (an installation may hold more than needed).
+function missingPermissions(actual,needed){
+ const level=k=>obj(actual)&&typeof actual[k]==='string'&&Object.hasOwn(PERMISSION_RANK,actual[k])?actual[k]:'none';
+ return Object.entries(needed).filter(([k,v])=>PERMISSION_RANK[level(k)]<PERMISSION_RANK[v]).map(([permission,required])=>({permission,required,installed:level(permission)}));
+}
+// Installation: only an installation that lacks something this operation needs fails, and the
+// error says what is missing and where the owner adds it. Extra installation permissions are fine.
+function checkInstallation(actual,a,operation){
+ const missing=missingPermissions(actual,permissions(a,operation));if(!missing.length)return;
+ throw new CoreError('INSTALLATION_PERMISSION_MISSING','not_executed',undefined,{account:a.account,app:a.app_name,operation,missing,
+  fix:'GitHub App '+a.app_name+' 的安装缺少：'+missing.map(m=>m.permission+':'+m.required+'（现为 '+m.installed+'）').join('，')+'。请主人在 App 设置的 Permissions 里加上（https://github.com/organizations/'+OWNER+'/settings/apps/'+a.app_slug+'/permissions），再到组织的安装页接受权限更新（https://github.com/organizations/'+OWNER+'/settings/installations/'+a.installation_id+'）。'});
+}
+// Execution token: must equal what was requested (nothing extra, nothing stronger); QQ's rule is unchanged.
+function checkTokenPermissions(actual,a,operation){
+ const expected=permissions(a,operation),superset=a.account==='qq';
+ if(!obj(actual)||Object.entries(expected).some(([k,v])=>superset?(PERMISSION_RANK[actual[k]]??-1)<PERMISSION_RANK[v]:actual[k]!==v)||(!superset&&Object.entries(actual).some(([k,v])=>v!=='none'&&!Object.hasOwn(expected,k))))bad('PERMISSION_MISMATCH');
 }
 function makeJwt(account,pem,now=Date.now()){
  const h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url');
@@ -179,8 +192,9 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(Number(app?.id)!==account.app_id||typeof app?.slug!=='string'||!account.allowed_slugs.includes(app.slug)||app?.owner?.login!==OWNER)bad('APP_IDENTITY_MISMATCH');
    const installation=await api('/app/installations/'+account.installation_id,jwt);
    if(Number(installation?.id)!==account.installation_id||Number(installation?.app_id)!==account.app_id||installation?.account?.login!==OWNER||installation?.account?.type!=='Organization'||!['selected','all'].includes(installation?.repository_selection)||installation?.suspended_at)bad('INSTALLATION_MISMATCH');
-   // PG's installed App has administration permission; ordinary execution never requests it.
-   checkPermissions(installation.permissions,account,'installation');
+   // An installation may hold more than the account needs (PG: administration; AD: secrets, workflows...);
+   // ordinary execution never requests it.
+   checkInstallation(installation.permissions,account,operation);
    // An unscoped metadata-only probe verifies the INSTALLATION's repository set.
    // A narrowed execution token alone would hide unexpected extra installations.
    const probeResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{permissions:{metadata:'read'}});
@@ -234,7 +248,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
    if(!Object.hasOwn(effectiveRepos,repo))bad('REPOSITORY_NOT_INSTALLED');
    const tokenResponse=await api('/app/installations/'+account.installation_id+'/access_tokens',jwt,'POST',{repository_ids:Object.values(effectiveRepos),permissions:permissions(account,operation)});
    if(typeof tokenResponse?.token!=='string'||!tokenResponse.token||Date.parse(tokenResponse.expires_at)<=now()+30000||!Number.isFinite(Date.parse(tokenResponse.expires_at)))bad('INVALID_INSTALLATION_TOKEN');
-   const token=tokenResponse.token;secrets.push(token);checkPermissions(tokenResponse.permissions,account,'execution',operation);
+   const token=tokenResponse.token;secrets.push(token);checkTokenPermissions(tokenResponse.permissions,account,operation);
    const repos=await api('/installation/repositories?per_page=100',token);
    if(!exactRepos(repos,effectiveRepos))scopeMismatch('EXECUTION_REPOSITORY_SCOPE_MISMATCH',repos,effectiveRepos);
    if(preflight?.kind==='owner_reference'){
@@ -280,7 +294,7 @@ function createClient({credentials,fetch:fetcher=globalThis.fetch,now=Date.now,a
     if(!errors.length)throw new CoreError('QUEUE_REJECTED','not_executed',undefined,{githubErrors:errors,readback:state,reason:'no mergeQueueEntry in response'});
     throw new CoreError(classifyQueueErrors(errors),'not_executed',undefined,{githubErrors:errors,readback:state});
    }
-   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.filter(r=>Object.hasOwn(scope.installation,r.name)).map(r=>({id:r.id,full_name:r.full_name})),installationRepositorySelection:installation.repository_selection,installationRepositoryCount:probe.repositories.length,scopeRevision:policy.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config),expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
+   const result=operation==='identity'?{app_id:account.app_id,app_slug:app.slug,owner:OWNER,permissions:permissions(account),installationPermissions:Object.fromEntries(Object.entries(obj(installation.permissions)?installation.permissions:{}).filter(([k,v])=>/^[a-z_]{1,40}$/.test(k)&&Object.hasOwn(PERMISSION_RANK,v)).slice(0,40)),missingInstallationPermissions:missingPermissions(installation.permissions,permissions(account)),repositories:repos.repositories.map(r=>({id:r.id,full_name:r.full_name})),installationRepositories:probe.repositories.filter(r=>Object.hasOwn(scope.installation,r.name)).map(r=>({id:r.id,full_name:r.full_name})),installationRepositorySelection:installation.repository_selection,installationRepositoryCount:probe.repositories.length,scopeRevision:policy.revision,scopeConfigSource:config===DEFAULT_CONFIG?'default':'file',scopeConfigDigest:configDigest(config),expires_at:tokenResponse.expires_at}:operation==='enqueue_pull'?await enqueue():operation==='commit_files'?await commitFilesModule.commitFiles({plan:preflight.plan,api,root,token,repoUrl:'https://github.com/'+OWNER+'/'+repo,bad,CoreError}):await api(route,token,method,body);
    return {ok:true,receipt:{scopeRevision:policy.revision,account:account.account,app_slug:app.slug,installation_id:account.installation_id,repo:OWNER+'/'+repo,operation,execution:'completed',url:typeof result?.html_url==='string'?result.html_url:app.html_url},result:clean(result,secrets)};
   }catch(e){return {ok:false,errorCode:e instanceof CoreError?e.code:'INTERNAL_ERROR',execution:e instanceof CoreError?e.execution:'not_executed',...(e instanceof CoreError&&e.status?{status:e.status}:{}),...(e instanceof CoreError&&e.details?{details:clean(e.details,secrets)}:{}),...(scopeDiagnostics?{diagnostics:clean(scopeDiagnostics,secrets)}:{})};}
   finally{secrets.fill('');}
