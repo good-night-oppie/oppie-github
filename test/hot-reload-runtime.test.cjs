@@ -10,7 +10,7 @@ const vm=require('node:vm'),fs=require('node:fs'),fsp=require('node:fs/promises'
 const {EventEmitter}=require('node:events');
 const realStore=require('../node/store.cjs');
 
-test('same worker process: deployment.json edits and settings saves apply to the next call without a restart',async t=>{
+test('same worker process: deployment.json account edits and settings saves apply to the next call without a restart; automaticReviews only at start',async t=>{
  const dir=await fsp.mkdtemp(path.join(await fsp.realpath(os.tmpdir()),'ogh-hot-'));t.after(()=>fsp.rm(dir,{recursive:true,force:true}));
  await fsp.mkdir(path.join(dir,'node'));
  const deploymentFile=path.join(dir,'deployment.json');
@@ -49,11 +49,13 @@ test('same worker process: deployment.json edits and settings saves apply to the
  writeDeployment({accounts:['deja','bb'],automaticReviews:false});
  assert.deepEqual(await accounts(),['bb','deja']);
  assert.notEqual((await run('bb')).errorCode,'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST');
- // automaticReviews is read per call too.
+ // automaticReviews is an owner safety switch (QQ review of #33): read once at worker start, so
+ // editing deployment.json cannot switch automatic reviews on in a running plugin.
  assert.equal((await call('review',{action:'bogus'})).errorCode,'AUTOMATION_DISABLED_BY_OWNER');
  writeDeployment({accounts:['deja','bb'],automaticReviews:true});
- assert.equal((await call('review',{action:'bogus'})).errorCode,'INVALID_REVIEW_ACTION');
+ assert.equal((await call('review',{action:'bogus'})).errorCode,'AUTOMATION_DISABLED_BY_OWNER');
  writeDeployment({accounts:['deja','bb'],automaticReviews:false});
+ assert.equal((await call('accounts')).scopeConfig.source,'default');
  // 3. Settings page: add AD and a repository; the next call uses them.
  assert.equal((await run('ad')).errorCode,'ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST');
  assert.equal((await run('deja','new-repo')).errorCode,'REPOSITORY_NOT_ALLOWED');
@@ -63,6 +65,7 @@ test('same worker process: deployment.json edits and settings saves apply to the
  const plan=await call('settings/propose',{config,expectedRevision:0});assert.equal(plan.ok,true,plan.errorCode);
  const saved=await call('settings/save',{config,expectedRevision:0,hash:plan.hash});assert.equal(saved.ok,true,saved.errorCode);assert.equal(saved.revision,1);
  assert.deepEqual(await accounts(),['ad','bb','deja']);
+ assert.equal((await call('accounts')).scopeConfig.source,'file');
  const ad=await run('ad');assert.ok(!['ACCOUNT_NOT_AVAILABLE_ON_THIS_HOST','ACCOUNT_REQUIRED'].includes(ad.errorCode),ad.errorCode);
  assert.notEqual((await run('deja','new-repo')).errorCode,'REPOSITORY_NOT_ALLOWED');
  // 4. Removing a repository and an account in the settings page also applies on the next call.
@@ -79,6 +82,13 @@ test('same worker process: deployment.json edits and settings saves apply to the
  assert.deepEqual(await accounts(),[]);
  writeDeployment({accounts:['deja'],automaticReviews:false});
  assert.deepEqual(await accounts(),['deja']);
+ // 6. QQ review of #33: after a save, deleting both scope-config.json and scope-config.key must not
+ // silently revert to the compiled defaults (which would undo the owner's restrictions).
+ fs.unlinkSync(path.join(dir,'private','scope-config.json'));fs.unlinkSync(path.join(dir,'private','scope-config.key'));
+ const gone=await run('deja','new-repo');assert.equal(gone.errorCode,'INVALID_SCOPE_CONFIGURATION');assert.equal(gone.execution,'not_executed');
+ assert.equal((await run('deja')).errorCode,'INVALID_SCOPE_CONFIGURATION');
+ assert.deepEqual((await call('accounts')).scopeConfig,{source:'invalid',error:'INVALID_SCOPE_CONFIGURATION'});
+ assert.equal((await call('settings/read')).source,'invalid');
  assert.equal(fetched,0,'no GitHub request was attempted');
 });
 
@@ -91,4 +101,25 @@ test('deployment reader validates every read and never caches',async t=>{
  for(const bad of ['[]','{}','{"accounts":"bb"}','{"accounts":["BB"]}','{"accounts":["bb","bb"]}','{"accounts":["bb"],"automaticReviews":"yes"}'])assert.throws(()=>parse(bad),bad);
  const missing=createDeploymentReader(path.join(os.tmpdir(),'ogh-missing-'+crypto.randomUUID()+'.json'));
  assert.deepEqual({...(await missing())},{accounts:[],automaticReviews:false,error:'INVALID_DEPLOYMENT'});
+});
+
+test('automaticReviews is taken from deployment.json as it was when the worker started',async t=>{
+ const dir=await fsp.mkdtemp(path.join(await fsp.realpath(os.tmpdir()),'ogh-auto-'));t.after(()=>fsp.rm(dir,{recursive:true,force:true}));
+ await fsp.mkdir(path.join(dir,'node'));
+ const file=path.join(dir,'deployment.json');fs.writeFileSync(file,JSON.stringify({accounts:['deja'],automaticReviews:true}));
+ let handler;const output=[];
+ const fakeProcess=new EventEmitter();fakeProcess.stdin=new EventEmitter();fakeProcess.stdout={write:s=>output.push(JSON.parse(s))};fakeProcess.exit=()=>{};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../node/runtime.cjs'),'utf8'),{__dirname:path.join(dir,'node'),process:fakeProcess,Buffer,console,require:name=>{
+  if(name==='./rpc-input.cjs')return {createReceiver:options=>{const r=require('../node/rpc-input.cjs').createReceiver(options);handler=line=>r.push(Buffer.from(line+'\n'));return r;}};
+  if(name==='./store.cjs')return {setAccountResolver:()=>{},paths:{root:path.join(dir,'private')},list:async()=>[],load:async()=>{throw Error('no key');}};
+  if(name==='./review-queue.cjs')return {createQueue:()=>({})};
+  if(name==='./inbox-service.cjs')return {createManager:()=>({start:async()=>({ok:false}),stop:async()=>({ok:true})})};
+  if(name==='./operations.cjs')return {};
+  if(name.startsWith('./'))return require(path.join(__dirname,'../node',name));
+  return require(name);
+ }});
+ const review=async()=>{const n=output.length;await handler(JSON.stringify({jsonrpc:'2.0',id:n+1,method:'review',params:{action:'bogus'}}));return output[n].result.errorCode;};
+ assert.equal(await review(),'INVALID_REVIEW_ACTION','enabled at start: reaches the action check');
+ fs.writeFileSync(file,JSON.stringify({accounts:['deja'],automaticReviews:false}));
+ assert.equal(await review(),'INVALID_REVIEW_ACTION','a later edit does not change the running worker');
 });
